@@ -26,6 +26,6 @@ export async function getParticipation(id:string,actor:Actor) {
 }
 export async function snapshot(tx:Tx,yearId:string,personId?:string) {
   const year=await tx.fiscalYear.findUniqueOrThrow({where:{id:yearId}});
-  const people=await tx.person.findMany({where:{...(personId?{id:personId}:{}),hiredOn:{lte:year.endsOn},OR:[{leftOn:null},{leftOn:{gte:year.startsOn}}]},include:{assignments:{where:{startsOn:{lte:year.endsOn},OR:[{endsOn:null},{endsOn:{gte:year.startsOn}}]},orderBy:{startsOn:'asc'}}}});
+  const people=await tx.person.findMany({where:{deletedAt:null,...(personId?{id:personId}:{}),hiredOn:{lte:year.endsOn},OR:[{leftOn:null},{leftOn:{gte:year.startsOn}}]},include:{assignments:{where:{startsOn:{lte:year.endsOn},OR:[{endsOn:null},{endsOn:{gte:year.startsOn}}]},orderBy:{startsOn:'asc'}}}});
   for(const person of people) if(person.assignments[0]) await tx.annualPersonnelScope.upsert({where:{fiscalYearId_personId:{fiscalYearId:yearId,personId:person.id}},update:{},create:{fiscalYearId:yearId,personId:person.id,departmentId:person.assignments[0].departmentId,basis:'snapshot ฝ่ายแรกที่มีผลในปี รวมผู้เข้าระหว่างปี (ค่าเริ่มต้น ปรับได้)'}});
 }

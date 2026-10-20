@@ -1,0 +1,27 @@
+import {test,expect} from '@playwright/test';
+import {fixture,testDb} from '../fixtures';
+import {randomToken,sha256,sign} from '../../lib/security';
+test.afterAll(()=>testDb.$disconnect());
+test('ฝ่ายที่สมัครและการลบ/กู้คืนทะเบียนกับบัญชีโดยรักษารายงาน',async({page})=>{
+  const f=await fixture(),token=randomToken();
+  await testDb.user.update({where:{id:f.user.id},data:{registrationDepartmentId:f.departments[1].id}});
+  await testDb.authSession.create({data:{userId:f.admin.id,tokenHash:sha256(sign(token)),csrfToken:randomToken(),expiresAt:new Date(Date.now()+600000)}});
+  await page.context().addCookies([{name:'management_session',value:token,url:'http://127.0.0.1:3001',httpOnly:true,sameSite:'Lax'}]);
+  await page.goto('/admin');
+  const account=page.locator('#accounts > details').filter({has:page.locator('summary strong',{hasText:'tester'})});
+  await account.locator(':scope > summary').click();
+  await expect(account).toContainText('ฝ่ายที่เลือกตอนสมัคร: บริหารงานทั่วไป');
+  await expect(account).toContainText('ฝ่ายปัจจุบันในทะเบียน: บัญชี');
+  await account.locator('details > summary').filter({hasText:'ลบบัญชีผู้ใช้'}).click();
+  const form=account.locator('form[action$="/delete"]');
+  await form.getByLabel('เหตุผลการลบ').fill('ทดสอบลบ');await form.getByLabel('พิมพ์ DELETE').fill('DELETE');
+  await form.getByRole('button',{name:'ยืนยันลบบัญชี',exact:true}).click();
+  await expect(page.locator('#accounts')).not.toContainText('tester');
+  expect(await testDb.trainingParticipation.count()).toBe(2);
+  await page.locator('#deleted summary').click();
+  const removed=page.locator('#deleted article').filter({hasText:'tester'});
+  await removed.getByRole('button',{name:'กู้คืนบัญชี',exact:true}).click();
+  await expect(page.locator('#accounts')).toContainText('tester');
+  expect((await testDb.user.findUniqueOrThrow({where:{id:f.user.id}})).active).toBe(false);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});

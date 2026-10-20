@@ -1,0 +1,26 @@
+import {test,expect} from '@playwright/test';
+import {fixture,testDb} from '../fixtures';
+test.afterAll(()=>testDb.$disconnect());
+test('สมัครและเปลี่ยนรหัสผ่านขั้นต่ำ 4 ตัว และปฏิเสธ 3 ตัวทั้งหน้าเว็บและ API',async({page})=>{
+  const f=await fixture();
+  await page.goto('/register');const form=page.locator('form[action="/api/auth/register"]');
+  await expect(form.getByRole('button',{name:'สมัครสมาชิก'})).toBeEnabled();
+  const csrf=await form.locator('[name=csrf]').inputValue();
+  const data={csrf,name:'ผู้ใช้รหัสสี่ตัว',username:'four_chars',departmentId:f.departments[1].id,password:'123',passwordConfirmation:'123'};
+  const rejected=await page.request.post('/api/auth/register',{headers:{Origin:'http://127.0.0.1:3001',Accept:'application/json'},data});expect(rejected.status()).toBe(422);
+  await form.getByLabel('ชื่อ-นามสกุล').fill(data.name);await form.getByLabel('ฝ่าย').selectOption(data.departmentId);await form.getByLabel('Username').fill(data.username);
+  await form.locator('[name=password]').fill('4826');await form.locator('[name=passwordConfirmation]').fill('4826');
+  await expect(form.locator('[name=password]')).toHaveAttribute('minlength','4');
+  await form.getByRole('button',{name:'สมัครสมาชิก'}).click();await expect(page).toHaveURL(/\/login/);
+  const created=await testDb.user.findUniqueOrThrow({where:{username:data.username}});
+  await testDb.user.update({where:{id:created.id},data:{personId:f.persons[2].id,approvedAt:new Date()}});
+  const login=async(password:string)=>{await page.goto('/login');await page.getByLabel('Username').fill(data.username);await page.getByLabel('Password').fill(password);await expect(page.getByRole('button',{name:'เข้าสู่ระบบ',exact:true})).toBeEnabled();await page.getByRole('button',{name:'เข้าสู่ระบบ',exact:true}).click();await expect(page).toHaveURL(/\/dashboard$/);};
+  await login('4826');await page.goto('/settings/password');
+  const change=page.locator('form[action="/api/auth/password"]');
+  const sessionCsrf=await change.locator('[name=csrf]').inputValue();
+  const short=await page.request.post('/api/auth/password',{headers:{Origin:'http://127.0.0.1:3001',Accept:'application/json'},data:{csrf:sessionCsrf,currentPassword:'4826',password:'123',passwordConfirmation:'123'}});expect(short.status()).toBe(422);
+  await change.locator('[name=currentPassword]').fill('4826');await change.locator('[name=password]').fill('9351');await change.locator('[name=passwordConfirmation]').fill('9351');
+  await expect(change.locator('[name=password]')).toHaveAttribute('minlength','4');
+  await change.getByRole('button',{name:'เปลี่ยนรหัสผ่าน',exact:true}).click();await expect(page).toHaveURL(/\/login/);
+  await login('9351');
+});

@@ -1,3 +1,4 @@
+import {PASSWORD_MIN_LENGTH} from '../lib/password-policy';
 import 'dotenv/config';
 import {PrismaClient,Prisma} from '@prisma/client';
 import bcrypt from 'bcryptjs';
@@ -9,7 +10,7 @@ if(!schema.endsWith('_test')||testUrl===process.env.DATABASE_URL)throw new Error
 if(!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(schema))throw new Error('Invalid test schema');
 export const testDb=new PrismaClient({datasources:{db:{url:testUrl}}});
 export const testPassword=process.env.ADMIN_INITIAL_PASSWORD!;
-if(!testPassword||testPassword.length<12)throw new Error('ต้องมีรหัสผ่านทดสอบจาก ADMIN_INITIAL_PASSWORD');
+if(!testPassword||testPassword.length<PASSWORD_MIN_LENGTH)throw new Error('ต้องมีรหัสผ่านทดสอบจาก ADMIN_INITIAL_PASSWORD');
 export async function fixture() {
   const tables=Prisma.dmmf.datamodel.models.map(m=>`"${schema}"."${m.dbName??m.name}"`).join(',');
   await testDb.$executeRawUnsafe('TRUNCATE '+tables+' CASCADE');

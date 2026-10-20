@@ -15,6 +15,7 @@ import {createArchive} from '@/lib/archive';
 import {retentionPreview,changeYearState,savePolicy,receiveArchive,approveDeletion,purgeYear} from '@/lib/retention';
 import {processNotices,queueAdminEmailTest,retryAdminEmail} from '@/lib/notifications';
 import {safeCell} from '@/lib/calendar';
+import {removeRegistration} from '@/lib/registrations';
 
 export const runtime='nodejs';
 export const maxDuration=10;
@@ -98,6 +99,10 @@ export async function POST(request:Request,context:Context) {
     }
     if(path[0]==='admin') {
       assertAdmin(actor);const [,_kind,id,action]=path;
+      if((_kind==='personnel'||_kind==='accounts')&&id&&['delete','restore'].includes(action)){
+        await removeRegistration(actor,_kind,id,data,action==='restore');
+        return done(request,'/admin?success='+encodeURIComponent(action==='restore'?'กู้คืนรายการแล้ว กรุณาตรวจข้อมูลและเปิดใช้งานอีกครั้ง':'ลบรายการแล้ว โดยเก็บประวัติรายงานเดิมไว้'));
+      }
       if(_kind==='years'&&!id)await createYear(actor,data);
       else if(_kind==='years'&&id&&action==='scopes')await addScopes(actor,id);
       else if(_kind==='scopes'&&id)await updateScope(actor,id,data);

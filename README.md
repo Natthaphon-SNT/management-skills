@@ -28,7 +28,7 @@ npm run dev
 ## Deploy ไป Vercel และ Neon
 
 1. สร้าง Neon project แผน Free เลือก Singapore แล้วคัดลอก pooled URL ไป `DATABASE_URL` และ direct URL ไป `DIRECT_URL` หรือสร้าง Neon ผ่าน Vercel Marketplace โดยเลือก Free และ Singapore
-2. สร้าง `.env` สำหรับฐานที่จะ deploy ตั้ง `DATABASE_URL`, `DIRECT_URL`, `SESSION_SECRET` (สุ่มอย่างน้อย 32 ตัวอักษร) และ `ADMIN_INITIAL_PASSWORD` (อย่างน้อย 12 ตัวอักษร) ห้ามใส่รหัสผ่าน production ใน source code
+2. สร้าง `.env` สำหรับฐานที่จะ deploy ตั้ง `DATABASE_URL`, `DIRECT_URL`, `SESSION_SECRET` (สุ่มอย่างน้อย 32 ตัวอักษร) และ `ADMIN_INITIAL_PASSWORD` (อย่างน้อย 4 ตัวอักษร) ห้ามใส่รหัสผ่าน production ใน source code
 3. รัน `npx prisma migrate deploy` แล้ว `npm run db:seed` กับฐานที่กำหนด ก่อนเปิดให้ใช้งานจริง ห้ามชี้ seed ไปฐานอื่นโดยไม่ตรวจ URL
 4. Commit และ push โค้ดขึ้น GitHub โดยไม่รวม `.env`, `.env.production`, `.vercel` หรือไฟล์ฐานข้อมูล
 5. ใน Vercel เลือก Add New → Project → Import repository นี้ ตั้ง Framework Preset เป็น Next.js, Root Directory เป็น root, Node.js 24.x และ Build Command เป็น `npm run build`
@@ -50,6 +50,8 @@ Build จะรัน migration ก่อน `next build` และ postinstall 
 อ่านรายละเอียดที่ [กติกาการรายงาน](docs/reporting-rules.md)
 
 ## สำรองและกู้คืน
+
+ดู [การลบทะเบียน/บัญชีและการใช้งานเกิน 5 ปี](docs/long-term-operation.md) การลบทะเบียนและบัญชีในหน้าจัดการเก็บประวัติรายงานเดิมไว้และกู้คืนรายการได้
 
 แอดมินสร้าง ZIP แบบ private ในฐานข้อมูลได้ มี checksum และข้อมูลประกอบ การอนุมัติลบต้องตรงกับรุ่นข้อมูลล่าสุดและผ่านการกู้คืนจริงก่อน ตั้ง `RESTORE_DIRECT_URL` เป็น Neon branch หรือฐาน/schema ว่างแยกจากฐานหลัก แล้วรัน:
 

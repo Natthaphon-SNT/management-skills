@@ -1,3 +1,4 @@
+import {PASSWORD_MIN_LENGTH} from '../lib/password-policy';
 import 'dotenv/config';
 import {PrismaClient} from '@prisma/client';
 import bcrypt from 'bcryptjs';
@@ -5,7 +6,7 @@ import {fiscalBounds,identifyFiscal,bangkokToday,dateOnly} from '../lib/calendar
 const db=new PrismaClient();
 async function main() {
   const password=process.env.ADMIN_INITIAL_PASSWORD;
-  if(!password || password.length<12) throw new Error('ADMIN_INITIAL_PASSWORD ต้องมีอย่างน้อย 12 ตัวอักษร');
+  if(!password || password.length<PASSWORD_MIN_LENGTH) throw new Error('ADMIN_INITIAL_PASSWORD ต้องมีอย่างน้อย 4 ตัวอักษร');
   await db.$transaction(async tx=> {
     const names=['ผู้อำนวยการ','บริหารงานทั่วไป','พัสดุ','ตรวจสอบและเบิกจ่าย 1','ตรวจสอบและเบิกจ่าย 2','บัญชี','การเงิน'];
     for(const name of names) await tx.department.upsert({where:{name},update:{},create:{name}});

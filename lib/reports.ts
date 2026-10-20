@@ -106,6 +106,6 @@ export type ReportData=Awaited<ReturnType<typeof reportData>>;
 export async function getLookups(tx:Tx,actor:Actor) {
   const [years,departments,people]=await Promise.all([
     tx.fiscalYear.findMany({orderBy:{year:'desc'}}),tx.department.findMany({orderBy:{name:'asc'}}),
-    tx.person.findMany({where:actor.role==='ADMIN'?{}:{id:actor.personId!},select:{id:true,code:true,fullName:true},orderBy:{fullName:'asc'}}),
+    tx.person.findMany({where:{deletedAt:null,...(actor.role==='ADMIN'?{}:{id:actor.personId!})},select:{id:true,code:true,fullName:true},orderBy:{fullName:'asc'}}),
   ]); return {years,departments,people};
 }

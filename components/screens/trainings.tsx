@@ -18,6 +18,7 @@ export async function TrainingsScreen({actor,query,segments}:{actor:Actor,query:
 async function TrainingEditor({actor,id}:{actor:Actor,id?:string}) {
   const record=id?await getParticipation(id,actor):null;
   const lookups=await withColdStartRetry(()=>getLookups(prisma,actor));
+  if(record&&!lookups.people.some(p=>p.id===record.personId))lookups.people.push({id:record.person.id,code:record.person.code,fullName:record.person.fullName});
   const activity=record?.activity,personId=record?.personId??actor.personId;
   return <><p className="breadcrumbs"><a href="/trainings">การอบรม</a> / {id?'แก้ไขรายการ':'บันทึกรายการใหม่'}</p><PageHead eyebrow="TRAINING RECORD" title={id?'แก้ไขการอบรม':'บันทึกการอบรม'} description="ผลการนำความรู้ไปใช้กรอกภายหลังได้ โดยไม่บังคับในขั้นตอนนี้"/><section className="card"><Form action={id?`/api/trainings/${id}/save`:'/api/trainings'} returnTo={id?`/trainings/${id}/edit`:'/trainings/create'} fiscal><div className="form-grid">
     <Field name="personId" label="เจ้าของรายการ" options={lookups.people.map(p=>({value:p.id,label:p.fullName}))} value={personId} empty={false} required data-person-select="true"/>

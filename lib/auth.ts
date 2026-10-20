@@ -11,7 +11,7 @@ export const getSession=cache(async()=> {
   const token=(await cookies()).get(COOKIE)?.value;
   if(!token) return null;
   return withColdStartRetry(()=>prisma.authSession.findUnique({where:{tokenHash:sha256(sign(token))},include:{user:{include:{person:true}}}})).then(session=>
-    session && session.expiresAt>new Date() && session.user.active && session.user.approvedAt && session.user.personId ? session : null);
+    session && session.expiresAt>new Date() && session.user.active && !session.user.deletedAt && !session.user.person?.deletedAt && session.user.approvedAt && session.user.personId ? session : null);
 });
 export async function requireActor():Promise<Actor> { const session=await getSession(); if(!session) throw new AppError(401,'กรุณาเข้าสู่ระบบ'); return session.user; }
 export async function pageActor(admin=false) { const session=await getSession(); if(!session) redirect('/login'); if(admin && session.user.role!=='ADMIN') redirect('/dashboard?error='+encodeURIComponent('คุณไม่มีสิทธิ์เข้าถึงส่วนนี้')); return session.user; }

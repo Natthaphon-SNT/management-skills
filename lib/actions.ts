@@ -1,3 +1,4 @@
+import {PASSWORD_MIN_LENGTH} from './password-policy';
 import {Prisma} from '@prisma/client';
 import {z} from 'zod';
 import bcrypt from 'bcryptjs';
@@ -25,10 +26,10 @@ export async function consumeLimit(key:string,maximum=5,seconds=60) {
 export async function login(data:Record<string,unknown>,ip:string) {
   const input=z.object({username:text,password:z.string().min(1).max(255)}).parse(data);
   const username=input.username.toLowerCase(); await consumeLimit('login:'+username+':'+ip);
-  const user=await withColdStartRetry(()=>prisma.user.findUnique({where:{username},select:{id:true,role:true,personId:true,name:true,username:true,active:true,approvedAt:true,passwordHash:true}}));
+  const user=await withColdStartRetry(()=>prisma.user.findUnique({where:{username},select:{id:true,role:true,personId:true,name:true,username:true,active:true,deletedAt:true,person:{select:{deletedAt:true}},approvedAt:true,passwordHash:true}}));
   const fallback='$2b$12$KIXx7EoJ4nCqkSOb7xOAMePL4I3pmswBHBdKWm66fRkFfZG4D7CDu';
   const valid=await bcrypt.compare(input.password,user?.passwordHash??fallback);
-  if(!user || !valid || !user.active) throw new AppError(422,'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
+  if(!user || !valid || !user.active || user.deletedAt || user.person?.deletedAt) throw new AppError(422,'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
   if(!user.approvedAt || !user.personId) throw new AppError(403,'บัญชีรอ ADMIN ตรวจสอบและเชื่อมทะเบียนบุคลากร');
   const token=randomToken(),csrfToken=randomToken();
   await prisma.$transaction(async tx=> {
@@ -41,7 +42,7 @@ export async function login(data:Record<string,unknown>,ip:string) {
 
 export async function register(data:Record<string,unknown>,ip:string) {
   await consumeLimit('register:'+ip,5,60);
-  const input=z.object({name:text,departmentId:text,username:z.string().min(3).max(100).regex(/^[A-Za-z0-9_-]+$/,'ชื่อผู้ใช้ใช้อักษรอังกฤษ ตัวเลข ขีดกลางและขีดล่าง'),password:z.string().min(12,'รหัสผ่านต้องมีอย่างน้อย 12 ตัวอักษร').max(72),passwordConfirmation:z.string(),role:z.never().optional(),personId:z.never().optional()})
+  const input=z.object({name:text,departmentId:text,username:z.string().min(3).max(100).regex(/^[A-Za-z0-9_-]+$/,'ชื่อผู้ใช้ใช้อักษรอังกฤษ ตัวเลข ขีดกลางและขีดล่าง'),password:z.string().min(PASSWORD_MIN_LENGTH,'รหัสผ่านต้องมีอย่างน้อย 4 ตัวอักษร').max(72),passwordConfirmation:z.string(),role:z.never().optional(),personId:z.never().optional()})
     .refine(v=>v.password===v.passwordConfirmation,{message:'ยืนยันรหัสผ่านไม่ตรงกัน',path:['passwordConfirmation']}).parse(data);
   const username=input.username.toLowerCase(); if(username==='admin') throw new AppError(422,'ชื่อผู้ใช้นี้สงวนสำหรับผู้ดูแลเริ่มต้น');
   const department=await withColdStartRetry(()=>prisma.department.findUnique({where:{id:input.departmentId},select:{active:true,name:true}}));
@@ -57,7 +58,7 @@ export async function register(data:Record<string,unknown>,ip:string) {
 }
 
 export async function changePassword(actor:Actor,data:Record<string,unknown>) {
-  const input=z.object({currentPassword:z.string().min(1),password:z.string().min(12,'รหัสผ่านใหม่ต้องมีอย่างน้อย 12 ตัวอักษร').max(72),passwordConfirmation:z.string()}).refine(v=>v.password===v.passwordConfirmation,{message:'ยืนยันรหัสผ่านไม่ตรงกัน'}).parse(data);
+  const input=z.object({currentPassword:z.string().min(1),password:z.string().min(PASSWORD_MIN_LENGTH,'รหัสผ่านใหม่ต้องมีอย่างน้อย 4 ตัวอักษร').max(72),passwordConfirmation:z.string()}).refine(v=>v.password===v.passwordConfirmation,{message:'ยืนยันรหัสผ่านไม่ตรงกัน'}).parse(data);
   const old=await withColdStartRetry(()=>prisma.user.findUniqueOrThrow({where:{id:actor.id},select:{passwordHash:true}}));
   if(!await bcrypt.compare(input.currentPassword,old.passwordHash)) throw new AppError(422,'รหัสผ่านเดิมไม่ถูกต้อง');
   const passwordHash=await bcrypt.hash(input.password,12);
@@ -78,6 +79,7 @@ export async function saveTraining(actor:Actor,data:Record<string,unknown>,id?:s
   if(input.status==='completed' && input.endsOn>bangkokToday()) throw new AppError(422,'ยังไม่ถึงวันสิ้นสุด จึงบันทึกว่าสำเร็จไม่ได้');
   return prisma.$transaction(async tx=> {
     for(const yearId of [...new Set([input.fiscalYearId,...(old?[old.activity.fiscalYearId]:[])])].sort()) await lockYear(tx,yearId);
+    if(!old&&await tx.person.count({where:{id:input.personId,deletedAt:{not:null}}}))throw new AppError(422,'ไม่สามารถเพิ่มการอบรมให้ทะเบียนที่ลบแล้ว');
     const year=await tx.fiscalYear.findUniqueOrThrow({where:{id:input.fiscalYearId}});
     try {validateTrainingDates(year.year,input.quarter,input.startsOn,input.endsOn,!!input.exceptionReason);} catch(error) {throw new AppError(422,(error as Error).message);}
     const currentAssignment=await assignment(tx,input.personId,input.startsOn);

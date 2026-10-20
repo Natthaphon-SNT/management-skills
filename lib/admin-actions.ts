@@ -32,6 +32,7 @@ export async function savePerson(actor:Actor,data:Record<string,unknown>,id?:str
     // เรียงล็อกทุกปีก่อนแก้ master ป้องกัน snapshot/backup เห็นข้อมูลไม่ครบชุด
     await tx.$queryRaw`SELECT id FROM ${sqlTable('fiscal_years')} ORDER BY id FOR UPDATE`;
     const old=id?await tx.person.findUniqueOrThrow({where:{id}}):null;
+    if(old?.deletedAt)throw new AppError(422,'กรุณากู้คืนทะเบียนก่อนแก้ไข');
     const values={code:input.code,fullName:input.fullName,personnelType:input.personnelType??null,position:input.position??null,hiredOn:dateOnly(input.hiredOn),leftOn:input.leftOn?dateOnly(input.leftOn):null,active:input.active};
     const person=old?await tx.person.update({where:{id},data:values}):await tx.person.create({data:values});
     const latest=await tx.personnelAssignment.findFirst({where:{personId:person.id},orderBy:{startsOn:'desc'}});
@@ -54,9 +55,12 @@ export async function saveAccount(actor:Actor,id:string,data:Record<string,unkno
     await tx.$queryRaw`SELECT id FROM ${sqlTable('fiscal_years')} ORDER BY id FOR UPDATE`;
     await tx.$queryRaw`SELECT id FROM ${sqlTable('users')} WHERE role='ADMIN' ORDER BY id FOR UPDATE`;
     const old=await tx.user.findUniqueOrThrow({where:{id}});
+    if(old.deletedAt)throw new AppError(422,'กรุณากู้คืนบัญชีก่อนแก้ไข');
+    if(input.active&&old.personId&&await tx.person.count({where:{id:old.personId,deletedAt:{not:null}}}))throw new AppError(422,'กรุณากู้คืนทะเบียนบุคลากรก่อนเปิดใช้งานบัญชี');
     if(input.personId&&old.personId&&old.personId!==input.personId) throw new AppError(422,'บัญชีที่เชื่อมแล้วไม่สามารถย้ายเจ้าของได้');
     if(old.role==='ADMIN'&&old.active&&old.approvedAt&&old.personId&&(input.role!=='ADMIN'||!input.active)&&await tx.user.count({where:{role:'ADMIN',active:true,approvedAt:{not:null},personId:{not:null}}})<=1) throw new AppError(422,'ต้องเหลือ ADMIN ที่ใช้งานได้อย่างน้อยหนึ่งบัญชี');
     if(input.intent==='approve'){
+      if(!await tx.person.count({where:{id:input.personId!,deletedAt:null}}))throw new AppError(422,'ทะเบียนบุคลากรนี้ถูกลบหรือไม่พบในระบบ');
       const linked=await tx.user.findFirst({where:{personId:input.personId!,id:{not:id}},select:{id:true}});
       if(linked)throw new AppError(422,'ทะเบียนบุคลากรนี้เชื่อมกับบัญชีอื่นแล้ว กรุณาเลือกทะเบียนที่ยังไม่มีบัญชี');
     }
@@ -94,11 +98,13 @@ export async function saveKpi(actor:Actor,data:Record<string,unknown>) {
 
 export async function adminData(actor:Actor) {
   assertAdmin(actor); return withColdStartRetry(()=>prisma.$transaction(async tx=> {
-    const [people,departments,years,strategies,accounts,scopes,kpis]=await Promise.all([
-      tx.person.findMany({include:{assignments:{include:{department:true},orderBy:{startsOn:'desc'}}},orderBy:{fullName:'asc'}}),tx.department.findMany(),tx.fiscalYear.findMany({orderBy:{year:'desc'}}),tx.strategy.findMany(),
-      tx.user.findMany({select:{id:true,username:true,name:true,email:true,role:true,active:true,approvedAt:true,personId:true,notices:{where:{channel:'email'},orderBy:{createdAt:'desc'},take:1,select:{status:true,error:true,sentAt:true,createdAt:true}}},orderBy:{createdAt:'desc'}}),
+    const [people,departments,years,strategies,accounts,scopes,kpis,deletedPeople,deletedAccounts]=await Promise.all([
+      tx.person.findMany({where:{deletedAt:null},include:{user:{select:{id:true}},assignments:{include:{department:true},orderBy:{startsOn:'desc'}}},orderBy:{fullName:'asc'}}),tx.department.findMany(),tx.fiscalYear.findMany({orderBy:{year:'desc'}}),tx.strategy.findMany(),
+      tx.user.findMany({where:{deletedAt:null},select:{id:true,username:true,name:true,email:true,role:true,active:true,approvedAt:true,personId:true,registrationDepartment:{select:{name:true}},notices:{where:{channel:'email'},orderBy:{createdAt:'desc'},take:1,select:{status:true,error:true,sentAt:true,createdAt:true}}},orderBy:{createdAt:'desc'}}),
       tx.annualPersonnelScope.findMany({include:{person:{select:{fullName:true}},department:{select:{name:true}},fiscalYear:{select:{year:true}}},orderBy:{fiscalYear:{year:'desc'}}}),
       tx.kPIDefinition.findMany({include:{target:true,fiscalYear:{select:{year:true}},department:{select:{name:true}},person:{select:{fullName:true}}},orderBy:{createdAt:'desc'}}),
-    ]); return {people,departments,years,strategies,accounts,scopes,kpis};
+      tx.person.findMany({where:{deletedAt:{not:null}},select:{id:true,code:true,fullName:true},orderBy:{deletedAt:'desc'}}),
+      tx.user.findMany({where:{deletedAt:{not:null}},select:{id:true,username:true,name:true},orderBy:{deletedAt:'desc'}}),
+    ]); return {people,departments,years,strategies,accounts,scopes,kpis,deletedPeople,deletedAccounts};
   },{timeout:8000}));
 }

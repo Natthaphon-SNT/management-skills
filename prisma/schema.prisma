@@ -22,6 +22,7 @@ model Department {
 }
 model Person {
   id String @id @default(cuid())
+  deletedAt DateTime? @db.Timestamptz(3)
   code String @unique
   fullName String
   personnelType String?
@@ -54,6 +55,7 @@ model PersonnelAssignment {
 }
 model User {
   id String @id @default(cuid())
+  deletedAt DateTime? @db.Timestamptz(3)
   username String @unique
   name String
   email String? @unique
