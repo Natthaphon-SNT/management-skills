@@ -5,6 +5,7 @@ import {bangkokToday,reportDeadline} from '../../lib/calendar';
 test.afterAll(()=>testDb.$disconnect());
 test('ตัวกรอง 3 ช่องและค้นหาชื่อ กำหนดส่งอัตโนมัติ และกรอกวันที่รายงานได้',async({page})=>{
   const f=await fixture(),token=randomToken();
+  await testDb.user.update({where:{id:f.admin.id},data:{email:'admin@example.invalid'}});
   await testDb.authSession.create({data:{userId:f.admin.id,tokenHash:sha256(sign(token)),csrfToken:randomToken(),expiresAt:new Date(Date.now()+600000)}});
   await page.context().addCookies([{name:'management_session',value:token,url:'http://127.0.0.1:3001',httpOnly:true,sameSite:'Lax'}]);
   await page.goto('/dashboard');
@@ -22,6 +23,7 @@ test('ตัวกรอง 3 ช่องและค้นหาชื่อ �
   await expect(page.getByLabel('กำหนดรายงานผลการนำไปใช้')).toHaveAttribute('readonly','');
   await page.getByRole('button',{name:'บันทึกการอบรม',exact:true}).click();
   await expect(page).toHaveURL('/trainings/'+id);
+  expect(await testDb.notification.count({where:{idempotencyKey:{startsWith:`training-saved:${id}:`},userId:f.admin.id,channel:'email'}})).toBe(1);
   const form=page.locator(`form[action="/api/trainings/${id}/result"]`);
   await form.getByLabel('อธิบายการนำความรู้ไปใช้').fill('นำไปปรับการทำงาน');
   await form.getByLabel('ผลลัพธ์ที่เกิดขึ้นจริง').fill('ทำงานได้สะดวกขึ้น');
@@ -32,5 +34,6 @@ test('ตัวกรอง 3 ช่องและค้นหาชื่อ �
   await expect(page.getByText('รอกรอกผลการนำไปใช้',{exact:true})).toHaveCount(0);
   const saved=await testDb.applicationResult.findUniqueOrThrow({where:{participationId:id}});
   expect(saved.reportedOn.toISOString().slice(0,10)).toBe(bangkokToday());
+  expect(await testDb.notification.count({where:{idempotencyKey:{startsWith:`result-submitted:${id}:`},userId:f.admin.id,channel:'email'}})).toBe(1);
   await page.goto('/admin');await expect(page.locator('main.main-content')).not.toContainText('ยุทธศาสตร์');
 });

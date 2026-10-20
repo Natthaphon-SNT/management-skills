@@ -83,8 +83,16 @@ export async function POST(request:Request,context:Context) {
     }
     if(path[0]==='trainings') {
       if(path.length===3&&path[2]==='delete') {await deleteTraining(actor,path[1],data);return done(request,'/trainings?success='+encodeURIComponent('ลบรายงานแล้ว'));}
-      if(path.length===1||path[2]==='save'||(request.method==='PUT'&&path.length===2)) {const id=await saveTraining(actor,data,path[1]);return done(request,'/trainings/'+id,{id},path[1]?200:201);}
-      if(path[2]==='result') {await saveResult(actor,path[1],data);return done(request,'/trainings/'+path[1]);}
+      if(path.length===1||path[2]==='save'||(request.method==='PUT'&&path.length===2)) {
+        const id=await saveTraining(actor,data,path[1]);
+        after(async()=>{try{await processNotices(performance.now()+6000,`training-saved:${id}:`);}catch{console.error('Training notification dispatch failed; queued for retry');}});
+        return done(request,'/trainings/'+id,{id},path[1]?200:201);
+      }
+      if(path[2]==='result') {
+        await saveResult(actor,path[1],data);
+        after(async()=>{try{await processNotices(performance.now()+6000,`result-submitted:${path[1]}:`);}catch{console.error('Result notification dispatch failed; queued for retry');}});
+        return done(request,'/trainings/'+path[1]);
+      }
       if(path[2]==='review') {await reviewResult(actor,path[1],data);return done(request,'/trainings/'+path[1]);}
       if(path[2]==='uploads')return NextResponse.json(await beginUpload(actor,path[1],data),{status:201});
     }

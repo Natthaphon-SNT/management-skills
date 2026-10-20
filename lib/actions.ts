@@ -8,7 +8,7 @@ import {type Actor,assertOwner,assertAdmin,COOKIE,cookieOptions} from './auth';
 import {AppError,randomToken,sha256,sign} from './security';
 import {dateOnly,day,bangkokToday,fiscalBounds,validateTrainingDates,FORMULAS,reportDeadline} from './calendar';
 import {audit,assignment,getParticipation,lockYear,snapshot,touchYear,type Tx} from './records';
-import {enqueueRegistrationNotices} from './notifications';
+import {enqueueRegistrationNotices,enqueueTrainingEvent} from './notifications';
 
 const text=z.string().trim().min(1,'กรุณากรอกข้อมูลให้ครบ').max(255,'ข้อความยาวเกิน 255 ตัวอักษร');
 const optionalText=z.preprocess(v=>v===''||v===null?undefined:v,z.string().trim().max(15000).optional());
@@ -89,7 +89,9 @@ export async function saveTraining(actor:Actor,data:Record<string,unknown>,id?:s
     const record=old?await tx.trainingParticipation.update({where:{id:old.id},data:partData}):await tx.trainingParticipation.create({data:{...partData,trainingActivityId:activity.id,personId:input.personId}});
     if(old) await tx.applicationResult.updateMany({where:{participationId:old.id},data:{reviewStatus:'pending',version:{increment:1}}});
     for(const yearId of new Set([input.fiscalYearId,...(old?[old.activity.fiscalYearId]:[])])) await touchYear(tx,yearId);
-    await audit(tx,actor,old?'update':'create','training_participations',record.id,input.personId,input.fiscalYearId,{before:old,after:input}); return record.id;
+    await audit(tx,actor,old?'update':'create','training_participations',record.id,input.personId,input.fiscalYearId,{before:old,after:input});
+    await enqueueTrainingEvent(tx,record.id,'training-saved',randomToken(),!!old);
+    return record.id;
   },{timeout:8000});
 }
 
@@ -122,8 +124,9 @@ export async function saveResult(actor:Actor,id:string,data:Record<string,unknow
     const old=await tx.applicationResult.findUnique({where:{participationId:id}});
     if(input.version!==undefined&&input.version!==(old?.version??0)) throw new AppError(409,'รายงานเปลี่ยนแล้ว กรุณารีเฟรชก่อนแก้ไข');
     const values={explanation:input.explanation,outcome:input.outcome,reportedOn:dateOnly(input.reportedOn),recordedBy:actor.id,reviewStatus:'pending'};
-    await tx.applicationResult.upsert({where:{participationId:id},create:{...values,participationId:id},update:{...values,version:{increment:1}}});
+    const result=await tx.applicationResult.upsert({where:{participationId:id},create:{...values,participationId:id},update:{...values,version:{increment:1}}});
     await touchYear(tx,record.activity.fiscalYearId); await audit(tx,actor,'report_result','training_participations',id,record.personId,record.activity.fiscalYearId,{before:old,after:input});
+    await enqueueTrainingEvent(tx,id,'result-submitted',String(result.version),!!old);
   });
 }
 export async function reviewResult(actor:Actor,id:string,data:Record<string,unknown>) {

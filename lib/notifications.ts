@@ -39,6 +39,15 @@ export async function enqueueRegistrationNotices(tx:Tx,user:{id:string,name:stri
   }))),skipDuplicates:true});
 }
 
+export async function enqueueTrainingEvent(tx:Tx,id:string,event:'training-saved'|'result-submitted',version:string,edited=false,at=new Date()) {
+  const record=await tx.trainingParticipation.findUniqueOrThrow({where:{id},select:{person:{select:{fullName:true,code:true}},department:{select:{name:true}},activity:{select:{title:true,fiscalYearId:true,startsOn:true,endsOn:true}},reportDueOn:true}});
+  const admins=await tx.user.findMany({where:{role:'ADMIN',active:true,deletedAt:null,approvedAt:{not:null},personId:{not:null},person:{deletedAt:null}},select:{id:true,email:true}});
+  const action=event==='training-saved'?(edited?'แก้ไขข้อมูลการอบรม':'บันทึกการอบรมใหม่'):(edited?'แก้ไขและส่งผลการนำความรู้ไปใช้':'ส่งผลการนำความรู้ไปใช้');
+  const message=`${action}: ${record.person.fullName} (รหัสบุคลากร ${record.person.code}) ฝ่าย ${record.department.name}\nหลักสูตร: ${record.activity.title}\nวันที่อบรม: ${day(record.activity.startsOn)} ถึง ${day(record.activity.endsOn)}\nกำหนดส่งผล: ${day(record.reportDueOn)}\n${event==='result-submitted'?'กรุณาตรวจสอบผลที่ส่งมา':'ตรวจสอบรายละเอียดการอบรมได้ในระบบ'} /trainings/${id}`;
+  const notices=admins.flatMap(admin=>(admin.email?['in_app','email']:['in_app']).map(channel=>({fiscalYearId:record.activity.fiscalYearId,userId:admin.id,idempotencyKey:`${event}:${id}:${version}:${admin.id}:${channel}`,channel,message,status:channel==='in_app'?'sent':'pending',sentAt:channel==='in_app'?at:null})));
+  if(notices.length)await tx.notification.createMany({data:notices,skipDuplicates:true});
+}
+
 export async function enqueueTrainingReminders(at=new Date(),dryRun=false) {
   const today=bangkokToday(at),tomorrow=day(new Date(+dateOnly(today)+86400000));
   const [records,admins]=await Promise.all([
@@ -89,8 +98,10 @@ export async function processNotices(deadline=performance.now()+6500,keyPrefix?:
         if(!notice.user.email||!process.env.SMTP_URL||!process.env.MAIL_FROM)throw new Error('ยังไม่ได้กำหนดอีเมล ADMIN หรือ SMTP/MAIL_FROM');
         const transport=nodemailer.createTransport({url:process.env.SMTP_URL,connectionTimeout:5500,greetingTimeout:5000,socketTimeout:5000});
         const origin=process.env.APP_URL||(process.env.VERCEL_PROJECT_PRODUCTION_URL?`https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`:'');
-        const text=notice.message+(origin?`\n\nเปิดระบบ: ${origin.replace(/\/$/,'')}${notice.idempotencyKey.startsWith('registration:')?'/admin#accounts':'/admin/notices'}`:'');
-        const subject=notice.idempotencyKey.startsWith('email-test:')?'ทดสอบอีเมลแจ้งเตือน กองคลัง':notice.idempotencyKey.startsWith('registration:')?'สมาชิกใหม่รออนุมัติ กองคลัง':notice.idempotencyKey.startsWith('training-result:')?'แจ้งเตือนกำหนดรายงานผลอบรม กองคลัง':'แจ้งเตือนข้อมูลรายปี กองคลัง';
+        const trainingEvent=notice.idempotencyKey.startsWith('training-saved:')||notice.idempotencyKey.startsWith('result-submitted:');
+        const target=trainingEvent?'/trainings/'+notice.idempotencyKey.split(':')[1]:notice.idempotencyKey.startsWith('registration:')?'/admin#accounts':'/admin/notices';
+        const text=notice.message+(origin?`\n\nเปิดระบบ: ${origin.replace(/\/$/,'')}${target}`:'');
+        const subject=notice.idempotencyKey.startsWith('training-saved:')?'แจ้งบันทึกข้อมูลการอบรม กองคลัง':notice.idempotencyKey.startsWith('result-submitted:')?'แจ้งส่งผลการนำความรู้ไปใช้ กองคลัง':notice.idempotencyKey.startsWith('email-test:')?'ทดสอบอีเมลแจ้งเตือน กองคลัง':notice.idempotencyKey.startsWith('registration:')?'สมาชิกใหม่รออนุมัติ กองคลัง':notice.idempotencyKey.startsWith('training-result:')?'แจ้งเตือนกำหนดรายงานผลอบรม กองคลัง':'แจ้งเตือนข้อมูลรายปี กองคลัง';
         let timer:ReturnType<typeof setTimeout>|undefined;
         try {await Promise.race([
           transport.sendMail({from:process.env.MAIL_FROM,to:notice.user.email,subject,text,messageId:`<${sha256(notice.idempotencyKey)}@management-skills.local>`}),
