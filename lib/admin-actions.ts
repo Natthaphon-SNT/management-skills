@@ -46,18 +46,25 @@ export async function savePerson(actor:Actor,data:Record<string,unknown>,id?:str
   });
 }
 export async function saveAccount(actor:Actor,id:string,data:Record<string,unknown>) {
-  assertAdmin(actor); const input=z.object({personId:text,role:z.enum(['USER','ADMIN']),active:flag,email:z.preprocess(v=>v===''?undefined:v,z.email().max(255).optional())}).parse(data);
+  assertAdmin(actor); const input=z.object({intent:z.enum(['approve','settings']).default('approve'),personId:z.preprocess(v=>v===''?undefined:v,text.optional()),role:z.enum(['USER','ADMIN']),active:flag,email:z.preprocess(v=>v===''?undefined:v,z.string().trim().pipe(z.email().max(255)).optional())})
+    .refine(v=>v.intent==='settings'||!!v.personId,{message:'กรุณาเชื่อมทะเบียนบุคลากรก่อนอนุมัติบัญชี',path:['personId']}).parse(data);
   await prisma.$transaction(async tx=> {
     await tx.$queryRaw`SELECT id FROM ${sqlTable('fiscal_years')} ORDER BY id FOR UPDATE`;
     await tx.$queryRaw`SELECT id FROM ${sqlTable('users')} WHERE role='ADMIN' ORDER BY id FOR UPDATE`;
     const old=await tx.user.findUniqueOrThrow({where:{id}});
-    if(old.personId&&old.personId!==input.personId) throw new AppError(422,'บัญชีที่เชื่อมแล้วไม่สามารถย้ายเจ้าของได้');
-    if(old.role==='ADMIN'&&(input.role!=='ADMIN'||!input.active)&&await tx.user.count({where:{role:'ADMIN',active:true,approvedAt:{not:null}}})<=1) throw new AppError(422,'ต้องเหลือ ADMIN ที่ใช้งานได้อย่างน้อยหนึ่งบัญชี');
-    await tx.user.update({where:{id},data:{...input,email:input.email??null,approvedAt:old.approvedAt??new Date()}});
-    const openYears=await tx.fiscalYear.findMany({where:{state:'open'},select:{id:true}});
-    for(const year of openYears)await snapshot(tx,year.id,input.personId);
+    if(input.personId&&old.personId&&old.personId!==input.personId) throw new AppError(422,'บัญชีที่เชื่อมแล้วไม่สามารถย้ายเจ้าของได้');
+    if(old.role==='ADMIN'&&old.active&&old.approvedAt&&old.personId&&(input.role!=='ADMIN'||!input.active)&&await tx.user.count({where:{role:'ADMIN',active:true,approvedAt:{not:null},personId:{not:null}}})<=1) throw new AppError(422,'ต้องเหลือ ADMIN ที่ใช้งานได้อย่างน้อยหนึ่งบัญชี');
+    if(input.intent==='approve'){
+      const linked=await tx.user.findFirst({where:{personId:input.personId!,id:{not:id}},select:{id:true}});
+      if(linked)throw new AppError(422,'ทะเบียนบุคลากรนี้เชื่อมกับบัญชีอื่นแล้ว กรุณาเลือกทะเบียนที่ยังไม่มีบัญชี');
+    }
+    await tx.user.update({where:{id},data:{role:input.role,active:input.active,email:input.email??null,...(input.intent==='approve'?{personId:input.personId!,approvedAt:old.approvedAt??new Date()}: {})}});
+    if(input.intent==='approve'){
+      const openYears=await tx.fiscalYear.findMany({where:{state:'open'},select:{id:true}});
+      for(const year of openYears)await snapshot(tx,year.id,input.personId!);
+    }
     if(!input.active||input.role!==old.role) await tx.authSession.deleteMany({where:{userId:id}});
-    await tx.fiscalYear.updateMany({data:{dataVersion:{increment:1}}}); await audit(tx,actor,'approve_or_update_account','users',id,input.personId,undefined,{role:input.role,active:input.active});
+    await tx.fiscalYear.updateMany({data:{dataVersion:{increment:1}}}); await audit(tx,actor,'approve_or_update_account','users',id,input.intent==='approve'?input.personId:old.personId??undefined,undefined,{role:input.role,active:input.active,intent:input.intent});
   });
 }
 export async function saveMaster(actor:Actor,table:'department'|'strategy',data:Record<string,unknown>,id?:string) {

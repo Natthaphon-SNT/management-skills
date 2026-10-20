@@ -18,6 +18,19 @@ async function main() {
     await assert.rejects(()=>deleteTraining(f.user,id,{reason:'ทดสอบ',confirmation:'DELETE'}),{status:403});
     await assert.rejects(()=>saveAccount(f.user,f.user.id,{personId:f.user.personId,role:'ADMIN',active:'1'}),{status:403});
     await assert.rejects(()=>saveAccount(f.admin,f.admin.id,{personId:f.admin.personId,role:'USER',active:'1'}));
+    const pending=await testDb.user.create({data:{username:'pending_permissions',name:'Pending',passwordHash:f.user.passwordHash}});
+    const scopeCount=await testDb.annualPersonnelScope.count();
+    await saveAccount(f.admin,pending.id,{intent:'settings',role:'ADMIN',active:'1',email:'admin@example.invalid'});
+    const updated=await testDb.user.findUniqueOrThrow({where:{id:pending.id}});
+    assert.equal(updated.role,'ADMIN');assert.equal(updated.personId,null);assert.equal(updated.approvedAt,null);
+    assert.equal(await testDb.annualPersonnelScope.count(),scopeCount);
+    // A pending ADMIN must not count as a usable replacement for the last real admin.
+    await assert.rejects(()=>saveAccount(f.admin,f.admin.id,{intent:'settings',role:'USER',active:'1'}),{status:422});
+    await assert.rejects(()=>saveAccount(f.admin,pending.id,{intent:'approve',personId:f.user.personId,role:'ADMIN',active:'1'}),{status:422});
+    await assert.rejects(()=>saveAccount(f.user,f.user.id,{intent:'settings',role:'ADMIN',active:'1'}),{status:403});
+    await saveAccount(f.admin,f.user.id,{intent:'settings',role:'ADMIN',active:'1'});
+    assert.equal((await testDb.user.findUniqueOrThrow({where:{id:f.user.id}})).personId,f.user.personId);
+    await saveAccount(f.admin,f.user.id,{intent:'settings',role:'USER',active:'1'});
     await saveAccount(f.admin,f.user.id,{personId:f.user.personId,role:'ADMIN',active:'1'});
     assert.equal((await testDb.user.findUniqueOrThrow({where:{id:f.user.id}})).role,'ADMIN');
     await assert.rejects(()=>deleteTraining(f.admin,id,{reason:'',confirmation:'DELETE'}));
