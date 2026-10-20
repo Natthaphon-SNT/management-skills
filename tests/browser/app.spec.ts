@@ -51,7 +51,10 @@ test('CSRF, การสมัครยกระดับสิทธิ์ แ�
   const body={name:'พัฒนา สมมติ',departmentId:f.departments[5].id,username:'pending',password:testPassword,passwordConfirmation:testPassword,csrf};
   const escalated=await page.request.post('/api/auth/register',{headers:{Origin:'http://127.0.0.1:3001',Accept:'application/json'},data:{...body,role:'ADMIN'}});expect(escalated.status()).toBe(422);
   const created=await page.request.post('/api/auth/register',{headers:{Origin:'http://127.0.0.1:3001',Accept:'application/json'},data:body});expect(created.status(),await created.text()).toBe(200);const account=await testDb.user.findUniqueOrThrow({where:{username:'pending'}});expect(account.role).toBe('USER');expect(account.personId).toBeNull();expect(account.approvedAt).toBeNull();expect(await testDb.person.count()).toBe(count);
-  await login(page);const missing=await page.request.post('/api/trainings',{headers:{Origin:'http://127.0.0.1:3001',Accept:'application/json'},data:payload()});expect(missing.status()).toBe(419);
+  expect(await testDb.notification.count({where:{idempotencyKey:{startsWith:`registration:${account.id}:`}}})).toBe(2);
+  await expect.poll(async()=>(await testDb.notification.findFirst({where:{channel:'email',idempotencyKey:{startsWith:`registration:${account.id}:`}}}))?.status).toBe('failed');
+  await login(page);await page.goto('/admin/notices');await expect(page.getByText('สมาชิกใหม่จะแจ้งในระบบ', {exact:false})).toBeVisible();await expect(page.getByRole('button',{name:'ลองส่งรายการค้างใหม่'})).toBeVisible();
+  const missing=await page.request.post('/api/trainings',{headers:{Origin:'http://127.0.0.1:3001',Accept:'application/json'},data:payload()});expect(missing.status()).toBe(419);
   const cross=await page.request.post('/api/trainings',{headers:{Origin:'https://attacker.example',Accept:'application/json'},data:payload()});expect(cross.status()).toBe(403);
 });
 test('XLSX จริงมี Table/กราฟแก้ไขได้และตัวกรองตรงกับ Dashboard ภายใน 10 วินาที',async({page})=> {

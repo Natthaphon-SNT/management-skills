@@ -3,6 +3,20 @@ import {prisma} from './prisma';
 import {bangkokToday,day,dateOnly} from './calendar';
 import {sha256} from './security';
 import {purgeYear} from './retention';
+import type {Tx} from './records';
+
+export async function enqueueRegistrationNotices(tx:Tx,user:{id:string,name:string,username:string},departmentName:string,at=new Date()) {
+  const today=dateOnly(bangkokToday(at));
+  const year=await tx.fiscalYear.findFirst({where:{state:{not:'purged'},startsOn:{lte:today},endsOn:{gte:today}},orderBy:{year:'desc'},select:{id:true}})
+    ??await tx.fiscalYear.findFirst({where:{state:{not:'purged'}},orderBy:{year:'desc'},select:{id:true}});
+  if(!year)return;
+  const admins=await tx.user.findMany({where:{role:'ADMIN',active:true,approvedAt:{not:null},personId:{not:null}},select:{id:true}});
+  const message=`มีสมาชิกสมัครใหม่รออนุมัติ: ${user.name} (ชื่อผู้ใช้ ${user.username}) ฝ่าย ${departmentName} กรุณาตรวจสอบตัวตนและเชื่อมทะเบียนบุคลากรที่ /admin#accounts`;
+  await tx.notification.createMany({data:admins.flatMap(admin=>['in_app','email'].map(channel=>({
+    fiscalYearId:year.id,userId:admin.id,idempotencyKey:`registration:${user.id}:${admin.id}:${channel}`,
+    channel,message,status:channel==='in_app'?'sent':'pending',sentAt:channel==='in_app'?at:null,
+  }))),skipDuplicates:true});
+}
 
 export async function enqueueTrainingReminders(at=new Date(),dryRun=false) {
   const today=bangkokToday(at),tomorrow=day(new Date(+dateOnly(today)+86400000));
@@ -32,11 +46,15 @@ export async function enqueueNotices(at=new Date(),dryRun=false) {
   if(!dryRun)await prisma.notification.createMany({data:actions.map(a=>({fiscalYearId:a.yearId,idempotencyKey:a.key,channel:a.channel,userId:a.userId,message:a.message,status:a.channel==='system'?'failed':'pending',error:a.channel==='system'?'ไม่มี ADMIN รับผิดชอบ ห้ามดำเนินการลบ':null})),skipDuplicates:true});
   return actions;
 }
-export async function processNotices(deadline=performance.now()+6500) {
-  const notices=await prisma.notification.findMany({where:{channel:{in:['in_app','email']},status:{in:['pending','failed','sending']},attempts:{lt:10},OR:[{leaseUntil:null},{leaseUntil:{lt:new Date()}}]},include:{user:{select:{id:true,role:true,active:true,approvedAt:true,email:true}}},orderBy:{createdAt:'asc'},take:20});
+export async function processNotices(deadline=performance.now()+6500,keyPrefix?:string) {
+  const notices=await prisma.notification.findMany({where:{...(keyPrefix?{idempotencyKey:{startsWith:keyPrefix}}:{}),channel:{in:['in_app','email']},status:{in:['pending','failed','sending']},attempts:{lt:10},OR:[{leaseUntil:null},{leaseUntil:{lt:new Date()}}]},include:{user:{select:{id:true,role:true,active:true,approvedAt:true,email:true}}},orderBy:{createdAt:'asc'},take:20});
   let processed=0;
   for(const notice of notices) {
     if(performance.now()>deadline)break;
+    if(notice.idempotencyKey.startsWith('registration:')) {
+      const account=await prisma.user.findUnique({where:{id:notice.idempotencyKey.split(':')[1]},select:{approvedAt:true,active:true}});
+      if(!account||account.approvedAt||!account.active){await prisma.notification.update({where:{id:notice.id},data:{status:'cancelled',leaseUntil:null}});continue;}
+    }
     if(notice.idempotencyKey.startsWith('training-result:')) {
       const [,id,due]=notice.idempotencyKey.split(':');
       const record=await prisma.trainingParticipation.findUnique({where:{id},select:{status:true,reportDueOn:true,result:{select:{id:true}}}});
@@ -49,7 +67,10 @@ export async function processNotices(deadline=performance.now()+6500) {
       if(notice.channel==='email') {
         if(!notice.user.email||!process.env.SMTP_URL||!process.env.MAIL_FROM)throw new Error('ยังไม่ได้กำหนดอีเมล ADMIN หรือ SMTP/MAIL_FROM');
         const transport=nodemailer.createTransport({url:process.env.SMTP_URL,connectionTimeout:2000,greetingTimeout:2000,socketTimeout:2500});
-        try {await transport.sendMail({from:process.env.MAIL_FROM,to:notice.user.email,subject:'แจ้งเตือนข้อมูลรายปี กองคลัง',text:notice.message,messageId:`<${sha256(notice.idempotencyKey)}@management-skills.local>`});}finally{transport.close();}
+        const origin=process.env.APP_URL||(process.env.VERCEL_PROJECT_PRODUCTION_URL?`https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`:'');
+        const text=notice.message+(origin?`\n\nเปิดระบบ: ${origin.replace(/\/$/,'')}${notice.idempotencyKey.startsWith('registration:')?'/admin#accounts':'/admin/notices'}`:'');
+        const subject=notice.idempotencyKey.startsWith('registration:')?'สมาชิกใหม่รออนุมัติ กองคลัง':notice.idempotencyKey.startsWith('training-result:')?'แจ้งเตือนกำหนดรายงานผลอบรม กองคลัง':'แจ้งเตือนข้อมูลรายปี กองคลัง';
+        try {await transport.sendMail({from:process.env.MAIL_FROM,to:notice.user.email,subject,text,messageId:`<${sha256(notice.idempotencyKey)}@management-skills.local>`});}finally{transport.close();}
       }
       await prisma.notification.update({where:{id:notice.id},data:{status:'sent',sentAt:new Date(),error:null,leaseUntil:null}});
     }catch(error) {

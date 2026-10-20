@@ -7,6 +7,7 @@ import {type Actor,assertOwner,assertAdmin,COOKIE,cookieOptions} from './auth';
 import {AppError,randomToken,sha256,sign} from './security';
 import {dateOnly,day,bangkokToday,fiscalBounds,validateTrainingDates,FORMULAS,reportDeadline} from './calendar';
 import {audit,assignment,getParticipation,lockYear,snapshot,touchYear,type Tx} from './records';
+import {enqueueRegistrationNotices} from './notifications';
 
 const text=z.string().trim().min(1,'กรุณากรอกข้อมูลให้ครบ').max(255,'ข้อความยาวเกิน 255 ตัวอักษร');
 const optionalText=z.preprocess(v=>v===''||v===null?undefined:v,z.string().trim().max(15000).optional());
@@ -43,13 +44,14 @@ export async function register(data:Record<string,unknown>,ip:string) {
   const input=z.object({name:text,departmentId:text,username:z.string().min(3).max(100).regex(/^[A-Za-z0-9_-]+$/,'ชื่อผู้ใช้ใช้อักษรอังกฤษ ตัวเลข ขีดกลางและขีดล่าง'),password:z.string().min(12,'รหัสผ่านต้องมีอย่างน้อย 12 ตัวอักษร').max(72),passwordConfirmation:z.string(),role:z.never().optional(),personId:z.never().optional()})
     .refine(v=>v.password===v.passwordConfirmation,{message:'ยืนยันรหัสผ่านไม่ตรงกัน',path:['passwordConfirmation']}).parse(data);
   const username=input.username.toLowerCase(); if(username==='admin') throw new AppError(422,'ชื่อผู้ใช้นี้สงวนสำหรับผู้ดูแลเริ่มต้น');
-  const department=await withColdStartRetry(()=>prisma.department.findUnique({where:{id:input.departmentId},select:{active:true}}));
+  const department=await withColdStartRetry(()=>prisma.department.findUnique({where:{id:input.departmentId},select:{active:true,name:true}}));
   if(!department?.active) throw new AppError(422,'ฝ่ายไม่พร้อมรับรายการใหม่');
   const passwordHash=await bcrypt.hash(input.password,12);
   await prisma.$transaction(async tx=> {
     // ไม่สร้างบุคลากรจากชื่อที่สมาชิกกรอกเอง รอผู้ดูแลเชื่อมทะเบียนเดิม
     const user=await tx.user.create({data:{username,name:input.name,passwordHash,registrationDepartmentId:input.departmentId,role:'USER'}});
     await audit(tx,{...user},'register','users',user.id);
+    await enqueueRegistrationNotices(tx,user,department.name);
   });
   return '/login?success='+encodeURIComponent('สมัครสมาชิกแล้ว รอ ADMIN ตรวจตัวตนและเชื่อมทะเบียนบุคลากร');
 }

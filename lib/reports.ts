@@ -4,7 +4,7 @@ import type {Actor} from './auth';
 import {assertOwner} from './auth';
 import {prisma,withColdStartRetry} from './prisma';
 import {AppError} from './security';
-import {bangkokToday,dateOnly,day,fiscalBounds,FORMULAS,KPI_NAMES,round,type KpiCode} from './calendar';
+import {bangkokToday,dateOnly,day,fiscalBounds,FORMULAS,KPI_NAMES,CATEGORIES,STATES,round,type KpiCode} from './calendar';
 import type {Tx} from './records';
 
 export const filterSchema=z.object({
@@ -80,11 +80,24 @@ async function buildReport(tx:Tx,actor:Actor,filters:Filters,lookups:boolean) {
     const def=chooseDefinition('F',scope.personId,scope.departmentId);
     const eligible=complete.filter(r=>r.personId===scope.personId&&(!def?.evidenceRequired||r._count.attachments>0)&&(!def?.verifiedRequired||r.result?.reviewStatus==='verified'));
     const hours=totalHours(eligible),target=def?.target?.value!==undefined&&def.target.value!==null?Number(def.target.value):null;
-    return {personId:scope.personId,fullName:scope.person.fullName,department:scope.department.name,hours,missingHours:eligible.filter(r=>r.activity.hours===null).length,target,gap:target===null?null:round(def?.direction==='at_most'?target-hours:hours-target)};
+    return {personId:scope.personId,code:scope.person.code,fullName:scope.person.fullName,department:scope.department.name,hours,missingHours:eligible.filter(r=>r.activity.hours===null).length,target,gap:target===null?null:round(def?.direction==='at_most'?target-hours:hours-target)};
   });
   function group(label:(r:ReportRow)=>string) { const result:Record<string,number>={}; for(const row of complete) {const key=label(row);result[key]=(result[key]??0)+1;} return result; }
   const lookupData=lookups?await getLookups(tx,actor):null;
-  return {year,filters,periodStart,periodEnd,scopes,rows,kpis,personHours,
+  const [selectedDepartment,selectedPerson]=await Promise.all([
+    filters.departmentId?tx.department.findUnique({where:{id:filters.departmentId},select:{name:true}}):null,
+    filters.personId?tx.person.findUnique({where:{id:filters.personId},select:{code:true,fullName:true}}):null,
+  ]);
+  const filterDetails:[string,string|number][]=[
+    ['ปีงบประมาณ',year.year],['ไตรมาส',filters.quarter?`ไตรมาส ${filters.quarter}`:'ทุกไตรมาส'],
+    ['ฝ่ายในฐานประเมิน',filters.departmentId?selectedDepartment?.name??'ไม่พบฝ่ายที่เลือก':'ทุกฝ่าย'],
+    ['ค้นหาชื่อ-นามสกุล',filters.q??'ไม่ได้ระบุ'],
+    ...(filters.personId?[['บุคลากร',selectedPerson?`${selectedPerson.code} · ${selectedPerson.fullName}`:'ไม่พบบุคลากรที่เลือก'] as [string,string]]:[]),
+    ...(filters.category?[['ประเภท',CATEGORIES[filters.category]] as [string,string]]:[]),
+    ...(filters.status?[['สถานะอบรม',STATES[filters.status]] as [string,string]]:[]),
+    ...(filters.reviewStatus?[['สถานะผล',filters.reviewStatus==='missing'?'รอกรอกผลการนำไปใช้':STATES[filters.reviewStatus]] as [string,string]]:[]),
+  ];
+  return {year,filters,filterDetails,periodStart,periodEnd,scopes,rows,kpis,personHours,
     charts:{department:group(r=>r.department.name),quarter:group(r=>'ไตรมาส '+r.activity.quarter),category:group(r=>r.activity.category)},
     summary:{population:scopes.length,completed:complete.length,developedPeople:distinct(complete.map(r=>r.personId)),missingResult:rows.filter(r=>!r.result).length,pending:rows.filter(r=>r.result?.reviewStatus==='pending').length,verified:rows.filter(r=>r.result?.reviewStatus==='verified').length,hours:totalHours(complete),missingHours:complete.filter(r=>r.activity.hours===null).length},
     lookups:lookupData,scopeNote:'ฐานบุคลากรใช้ snapshot ประจำปีและฝ่ายใน snapshot; กิจกรรมจริงนับตามวันที่เริ่ม ไตรมาสหลักมาจากวันที่เริ่ม; รวมคนไม่มีบัญชี/ไม่มีอบรมในตัวหาร; ตัวกรองประเภท/สถานะกิจกรรมไม่ลดฐานบุคลากร; กิจกรรมข้ามไตรมาสต้องผ่าน ADMIN ก่อนนับผลสำเร็จ'};

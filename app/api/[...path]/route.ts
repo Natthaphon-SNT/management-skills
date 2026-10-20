@@ -1,4 +1,4 @@
-import {NextResponse} from 'next/server';
+import {NextResponse,after} from 'next/server';
 import {cookies} from 'next/headers';
 import {Prisma} from '@prisma/client';
 import {ZodError} from 'zod';
@@ -71,7 +71,9 @@ export async function POST(request:Request,context:Context) {
     checkOrigin(request);const path=(await context.params).path;data=await inputData(request);
     if(path[0]==='auth'&&['login','register'].includes(path[1])) {
       await validateCsrf(request,data,true);const ip=(request.headers.get('x-forwarded-for')??'local').split(',')[0].trim();
-      const next=path[1]==='login'?await login(data,ip):await register(data,ip);return done(request,next);
+      const next=path[1]==='login'?await login(data,ip):await register(data,ip);
+      if(path[1]==='register')after(async()=>{try{await processNotices(performance.now()+4000,'registration:');}catch{console.error('Registration notification dispatch failed; queued for retry');}});
+      return done(request,next);
     }
     const actor=await requireActor();await validateCsrf(request,data);
     if(path[0]==='auth') {
@@ -103,7 +105,7 @@ export async function POST(request:Request,context:Context) {
       else if(_kind==='accounts'&&id)await saveAccount(actor,id,data);
       else if(_kind==='departments'||_kind==='strategies')await saveMaster(actor,_kind==='departments'?'department':'strategy',data,id);
       else if(_kind==='kpis')await saveKpi(actor,data);
-      else if(_kind==='notices'&&id==='retry')await processNotices();
+      else if(_kind==='notices'&&id==='retry'){await prisma.notification.updateMany({where:{status:'failed',channel:'email',OR:[{leaseUntil:null},{leaseUntil:{lt:new Date()}}]},data:{attempts:0}});await processNotices();}
       else if(_kind==='retention'&&id) {
         if(action==='state')await changeYearState(actor,id,data);
         else if(action==='policy')await savePolicy(actor,id,data);
