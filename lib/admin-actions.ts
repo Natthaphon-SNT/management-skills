@@ -24,6 +24,20 @@ export async function updateScope(actor:Actor,id:string,data:Record<string,unkno
   assertAdmin(actor); const input=z.object({departmentId:text,included:flag,basis:z.string().trim().min(1).max(1000)}).parse(data);
   await prisma.$transaction(async tx=> {const old=await tx.annualPersonnelScope.findUniqueOrThrow({where:{id}});await lockYear(tx,old.fiscalYearId);await tx.annualPersonnelScope.update({where:{id},data:input});await touchYear(tx,old.fiscalYearId);await audit(tx,actor,'revise_scope','annual_personnel_scopes',id,old.personId,old.fiscalYearId,{before:old,after:input});});
 }
+export async function removeScope(actor:Actor,id:string,data:Record<string,unknown>) {
+  assertAdmin(actor);
+  const {reason}=z.object({reason:z.string().trim().min(1,'กรุณาระบุเหตุผลการนำออก').max(1000),confirmation:z.literal('DELETE')}).parse(data);
+  await prisma.$transaction(async tx=> {
+    const scope=await tx.annualPersonnelScope.findUnique({where:{id},select:{fiscalYearId:true}});
+    if(!scope)throw new AppError(404,'ไม่พบฐานบุคลากรประจำปี');
+    await lockYear(tx,scope.fiscalYearId);
+    const old=await tx.annualPersonnelScope.findUniqueOrThrow({where:{id}});
+    // Keep the snapshot so future automatic snapshots cannot re-add this person.
+    const updated=await tx.annualPersonnelScope.update({where:{id},data:{included:false,basis:reason}});
+    await touchYear(tx,old.fiscalYearId);
+    await audit(tx,actor,'remove_scope','annual_personnel_scopes',id,old.personId,old.fiscalYearId,{before:old,after:updated});
+  });
+}
 export async function savePerson(actor:Actor,data:Record<string,unknown>,id?:string) {
   assertAdmin(actor);
   const input=z.object({code:text,fullName:text,personnelType:optional,position:optional,hiredOn:date,leftOn:z.preprocess(v=>v===''?undefined:v,date.optional()),active:flag,departmentId:text,effectiveOn:z.preprocess(v=>v===''?undefined:v,date.optional())})

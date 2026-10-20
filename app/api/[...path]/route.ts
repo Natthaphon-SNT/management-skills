@@ -6,7 +6,7 @@ import {prisma,withColdStartRetry} from '@/lib/prisma';
 import {assertAdmin,requireActor,validateCsrf,COOKIE,getSession,type Actor} from '@/lib/auth';
 import {AppError,checkOrigin,requestOrigin,asJson} from '@/lib/security';
 import {login,register,changePassword,saveTraining,deleteTraining,saveResult,reviewResult} from '@/lib/actions';
-import {createYear,addScopes,updateScope,savePerson,saveAccount,saveMaster,saveKpi} from '@/lib/admin-actions';
+import {createYear,addScopes,updateScope,removeScope,savePerson,saveAccount,saveMaster,saveKpi} from '@/lib/admin-actions';
 import {getParticipation,audit} from '@/lib/records';
 import {reportData} from '@/lib/reports';
 import {persistExport,type ExportKind,type ExportFormat} from '@/lib/exports';
@@ -105,7 +105,11 @@ export async function POST(request:Request,context:Context) {
       }
       if(_kind==='years'&&!id)await createYear(actor,data);
       else if(_kind==='years'&&id&&action==='scopes')await addScopes(actor,id);
-      else if(_kind==='scopes'&&id)await updateScope(actor,id,data);
+      else if(_kind==='scopes'&&id&&action==='delete'){
+        await removeScope(actor,id,data);
+        return done(request,'/admin?success='+encodeURIComponent('นำออกจากฐานปีนี้แล้ว รายงานการอบรมเดิมยังอยู่ครบ'));
+      }
+      else if(_kind==='scopes'&&id&&!action)await updateScope(actor,id,data);
       else if(_kind==='personnel')await savePerson(actor,data,id);
       else if(_kind==='accounts'&&id&&action==='test-email'){
         const key=await queueAdminEmailTest(actor,id);
