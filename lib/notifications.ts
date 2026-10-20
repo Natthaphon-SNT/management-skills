@@ -19,7 +19,7 @@ export async function queueAdminEmailTest(actor:Actor,userId:string){
 }
 
 export async function retryAdminEmail(userId:string){
-  const deadline=performance.now()+4500;
+  const deadline=performance.now()+6000;
   const user=await prisma.user.findUnique({where:{id:userId},select:{role:true,active:true,approvedAt:true,personId:true,email:true}});
   if(!user||user.role!=='ADMIN'||!user.active||!user.approvedAt||!user.personId||!user.email)return;
   await prisma.notification.updateMany({where:{userId,channel:'email',status:'failed',OR:[{leaseUntil:null},{leaseUntil:{lt:new Date()}}]},data:{attempts:0}});
@@ -70,31 +70,31 @@ export async function enqueueNotices(at=new Date(),dryRun=false) {
 export async function processNotices(deadline=performance.now()+6500,keyPrefix?:string,userId?:string) {
   const notices=await prisma.notification.findMany({where:{...(keyPrefix?{idempotencyKey:{startsWith:keyPrefix}}:{}),...(userId?{userId}:{}),channel:{in:['in_app','email']},status:{in:['pending','failed','sending']},attempts:{lt:10},OR:[{leaseUntil:null},{leaseUntil:{lt:new Date()}}]},include:{user:{select:{id:true,role:true,active:true,approvedAt:true,email:true}}},orderBy:{createdAt:'asc'},take:20});
   let processed=0;
-  for(const notice of notices) {
-    if(performance.now()+750>deadline)break;
+  const deliver=async(notice:typeof notices[number])=> {
+    if(performance.now()+750>deadline)return;
     if(notice.idempotencyKey.startsWith('registration:')) {
       const account=await prisma.user.findUnique({where:{id:notice.idempotencyKey.split(':')[1]},select:{approvedAt:true,active:true}});
-      if(!account||account.approvedAt||!account.active){await prisma.notification.update({where:{id:notice.id},data:{status:'cancelled',leaseUntil:null}});continue;}
+      if(!account||account.approvedAt||!account.active){await prisma.notification.update({where:{id:notice.id},data:{status:'cancelled',leaseUntil:null}});return;}
     }
     if(notice.idempotencyKey.startsWith('training-result:')) {
       const [,id,due]=notice.idempotencyKey.split(':');
       const record=await prisma.trainingParticipation.findUnique({where:{id},select:{status:true,reportDueOn:true,result:{select:{id:true}}}});
-      if(!record||record.result||record.status==='cancelled'||day(record.reportDueOn)!==due){await prisma.notification.update({where:{id:notice.id},data:{status:'cancelled',leaseUntil:null}});continue;}
+      if(!record||record.result||record.status==='cancelled'||day(record.reportDueOn)!==due){await prisma.notification.update({where:{id:notice.id},data:{status:'cancelled',leaseUntil:null}});return;}
     }
     const lease=await prisma.notification.updateMany({where:{id:notice.id,status:{not:'sent'},OR:[{leaseUntil:null},{leaseUntil:{lt:new Date()}}]},data:{leaseUntil:new Date(Date.now()+30000),status:'sending',attempts:{increment:1}}});
-    if(!lease.count)continue;
+    if(!lease.count)return;
     try {
       if(!notice.user?.active||!notice.user.approvedAt||notice.user.role!=='ADMIN')throw new Error('ผู้รับไม่ใช่ ADMIN ที่ใช้งานอยู่');
       if(notice.channel==='email') {
         if(!notice.user.email||!process.env.SMTP_URL||!process.env.MAIL_FROM)throw new Error('ยังไม่ได้กำหนดอีเมล ADMIN หรือ SMTP/MAIL_FROM');
-        const transport=nodemailer.createTransport({url:process.env.SMTP_URL,connectionTimeout:3000,greetingTimeout:3000,socketTimeout:3000});
+        const transport=nodemailer.createTransport({url:process.env.SMTP_URL,connectionTimeout:5500,greetingTimeout:5000,socketTimeout:5000});
         const origin=process.env.APP_URL||(process.env.VERCEL_PROJECT_PRODUCTION_URL?`https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`:'');
         const text=notice.message+(origin?`\n\nเปิดระบบ: ${origin.replace(/\/$/,'')}${notice.idempotencyKey.startsWith('registration:')?'/admin#accounts':'/admin/notices'}`:'');
         const subject=notice.idempotencyKey.startsWith('email-test:')?'ทดสอบอีเมลแจ้งเตือน กองคลัง':notice.idempotencyKey.startsWith('registration:')?'สมาชิกใหม่รออนุมัติ กองคลัง':notice.idempotencyKey.startsWith('training-result:')?'แจ้งเตือนกำหนดรายงานผลอบรม กองคลัง':'แจ้งเตือนข้อมูลรายปี กองคลัง';
         let timer:ReturnType<typeof setTimeout>|undefined;
         try {await Promise.race([
           transport.sendMail({from:process.env.MAIL_FROM,to:notice.user.email,subject,text,messageId:`<${sha256(notice.idempotencyKey)}@management-skills.local>`}),
-          new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(new Error('SMTP timeout'),{code:'ETIMEDOUT'})),Math.max(1,Math.min(3500,deadline-performance.now()-300)));}),
+          new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(new Error('SMTP timeout'),{code:'ETIMEDOUT'})),Math.max(1,Math.min(6000,deadline-performance.now()-300)));}),
         ]);}finally{if(timer)clearTimeout(timer);transport.close();}
       }
       await prisma.notification.update({where:{id:notice.id},data:{status:'sent',sentAt:new Date(),error:null,leaseUntil:null}});
@@ -103,10 +103,15 @@ export async function processNotices(deadline=performance.now()+6500,keyPrefix?:
       const message=code==='ETIMEDOUT'?'SMTP ตอบช้าเกินเวลาที่กำหนด ระบบจะลองส่งใหม่':code==='EAUTH'?'SMTP ยืนยันตัวตนไม่ผ่าน กรุณาตรวจบัญชีผู้ส่งและ App Password':code==='EENVELOPE'?'SMTP ปฏิเสธผู้ส่งหรือผู้รับ กรุณาตรวจอีเมล':error instanceof Error&&['ผู้รับไม่ใช่ ADMIN ที่ใช้งานอยู่','ยังไม่ได้กำหนดอีเมล ADMIN หรือ SMTP/MAIL_FROM'].includes(error.message)?error.message:'ส่งอีเมลไม่สำเร็จ กรุณาตรวจผู้ให้บริการ SMTP';
       await prisma.notification.update({where:{id:notice.id},data:{status:'failed',error:message,leaseUntil:null}});
     }processed++;
-  }return processed;
+  };
+  let cursor=0;
+  await Promise.all(Array.from({length:Math.min(2,notices.length)},async()=>{
+    while(cursor<notices.length&&performance.now()+750<=deadline)await deliver(notices[cursor++]);
+  }));
+  return processed;
 }
 export async function runScheduledWork() {
-  const started=performance.now();await enqueueNotices();await enqueueTrainingReminders();const notices=await processNotices(started+6000);
+  const started=performance.now();await enqueueNotices();await enqueueTrainingReminders();const notices=await processNotices(started+7500);
   await prisma.authSession.deleteMany({where:{expiresAt:{lt:new Date()}}});await prisma.rateLimit.deleteMany({where:{resetAt:{lt:new Date()}}});await prisma.pendingUpload.deleteMany({where:{expiresAt:{lt:new Date()}}});
   if(process.env.RETENTION_ENABLED==='true'&&performance.now()-started<6500) {
     const policies=await prisma.retentionPolicy.findMany({where:{autoDelete:true,legalHold:false},select:{fiscalYearId:true}});

@@ -72,7 +72,7 @@ export async function POST(request:Request,context:Context) {
     if(path[0]==='auth'&&['login','register'].includes(path[1])) {
       await validateCsrf(request,data,true);const ip=(request.headers.get('x-forwarded-for')??'local').split(',')[0].trim();
       const next=path[1]==='login'?await login(data,ip):await register(data,ip);
-      if(path[1]==='register')after(async()=>{try{await processNotices(performance.now()+4000,'registration:');}catch{console.error('Registration notification dispatch failed; queued for retry');}});
+      if(path[1]==='register')after(async()=>{try{await processNotices(performance.now()+6000,'registration:');}catch{console.error('Registration notification dispatch failed; queued for retry');}});
       return done(request,next);
     }
     const actor=await requireActor();await validateCsrf(request,data);
@@ -104,7 +104,7 @@ export async function POST(request:Request,context:Context) {
       else if(_kind==='personnel')await savePerson(actor,data,id);
       else if(_kind==='accounts'&&id&&action==='test-email'){
         const key=await queueAdminEmailTest(actor,id);
-        await processNotices(performance.now()+4500,key);
+        await processNotices(performance.now()+6500,key);
         return done(request,'/admin?success='+encodeURIComponent('ดำเนินการทดสอบอีเมลแล้ว ตรวจสถานะอีเมลล่าสุดของบัญชีนี้')+'#accounts');
       }
       else if(_kind==='accounts'&&id){await saveAccount(actor,id,data);try{await retryAdminEmail(id);}catch{console.error('Admin email retry failed; queued for retry');}}

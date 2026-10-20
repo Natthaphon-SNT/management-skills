@@ -9,16 +9,17 @@ async function main(){
   const {enqueueRegistrationNotices,processNotices,queueAdminEmailTest,retryAdminEmail}=await import('../lib/notifications');
   const {prisma}=await import('../lib/prisma');
   const messages:string[]=[];
-  let reject=false,stall=false;
+  let reject=false,stall=false,stallRecipient='';
   const server=net.createServer(socket=>{
     socket.setEncoding('utf8');socket.write('220 localhost test SMTP\r\n');
-    let input='',data=false,body='';
+    let input='',data=false,body='',recipient='';
     socket.on('data',chunk=>{
       input+=chunk;
       while(input.includes('\r\n')){
         const end=input.indexOf('\r\n'),line=input.slice(0,end);input=input.slice(end+2);
-        if(data){if(line==='.') {data=false;if(!stall){if(!reject)messages.push(body);socket.write(reject?'550 rejected for test\r\n':'250 accepted\r\n');}body='';}else body+=line+'\r\n';continue;}
+        if(data){if(line==='.') {data=false;if(!stall&&recipient!==stallRecipient){if(!reject)messages.push(body);socket.write(reject?'550 rejected for test\r\n':'250 accepted\r\n');}body='';}else body+=line+'\r\n';continue;}
         if(/^EHLO|^HELO/.test(line))socket.write('250 localhost\r\n');
+        else if(/^RCPT TO:/i.test(line)){recipient=line.match(/<([^>]+)>/)?.[1]??'';socket.write('250 OK\r\n');}
         else if(line==='DATA'){data=true;socket.write('354 send data\r\n');}
         else if(line==='QUIT'){socket.end('221 bye\r\n');}
         else socket.write('250 OK\r\n');
@@ -83,6 +84,13 @@ async function main(){
     const slow=await testDb.notification.findUniqueOrThrow({where:{idempotencyKey:slowKey}});
     assert.equal(slow.status,'failed');assert.ok(slow.error?.includes('SMTP ตอบช้า'));assert.ok(performance.now()-started<2000);
     stall=false;
+    await testDb.notification.update({where:{idempotencyKey:slowKey},data:{status:'cancelled'}});
+    const slowAdmin=await queueAdminEmailTest(f.admin,f.admin.id),fastAdmin=await queueAdminEmailTest(f.admin,f.user.id);
+    stallRecipient='admin@example.invalid';
+    const parallelStart=performance.now();await processNotices(parallelStart+1100,'email-test:');
+    assert.equal((await testDb.notification.findUniqueOrThrow({where:{idempotencyKey:slowAdmin}})).status,'failed');
+    assert.equal((await testDb.notification.findUniqueOrThrow({where:{idempotencyKey:fastAdmin}})).status,'sent');
+    assert.ok(performance.now()-parallelStart<2000);
     console.log('PASS: registration queue, recipients, dedup, missing SMTP, rejected SMTP, successful local SMTP, no duplicate send, stale approval cancellation (no external email sent)');
   }finally{server.close();await prisma.$disconnect();await testDb.$disconnect();}
 }
