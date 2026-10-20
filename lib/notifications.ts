@@ -3,7 +3,6 @@ import {prisma} from './prisma';
 import {bangkokToday,day,dateOnly} from './calendar';
 import {sha256,randomToken,AppError} from './security';
 import {assertAdmin,type Actor} from './auth';
-import {purgeYear} from './retention';
 import type {Tx} from './records';
 
 export async function queueAdminEmailTest(actor:Actor,userId:string){
@@ -69,7 +68,7 @@ export async function enqueueNotices(at=new Date(),dryRun=false) {
   for(const year of years) {
     const days=Math.round((+year.endsOn-+dateOnly(today))/86400000),noticeDays=(year.retention?.noticeDays??[30,7,1]) as number[];
     if(!noticeDays.includes(days))continue;
-    const message=`ปีงบประมาณ ${year.year} สิ้นสุด ${day(year.endsOn)} เวลา 23:59:59 Asia/Bangkok เหลือ ${days} วัน มี ${year._count.activities} กิจกรรม กรุณาตรวจรายงาน ปิดปี สำรอง และทดสอบกู้คืน การสิ้นปีไม่ใช่คำสั่งลบข้อมูล`;
+    const message=`ปีงบประมาณ ${year.year} สิ้นสุด ${day(year.endsOn)} เวลา 23:59:59 Asia/Bangkok เหลือ ${days} วัน มี ${year._count.activities} กิจกรรม แอดมินต้องตรวจรายงาน ปิดปี ดาวน์โหลด ZIP ทั้งชุดเก็บภายนอก ทดสอบกู้คืน และระบุที่เก็บก่อนล้างข้อมูลเพื่อคืนพื้นที่ การสิ้นปีไม่ใช่คำสั่งลบข้อมูล /admin/retention?fiscalYearId=${year.id}`;
     if(!admins.length)actions.push({yearId:year.id,key:`no-admin:${year.id}:${days}`,channel:'system',userId:null,message});
     for(const admin of admins)for(const channel of ['in_app','email'])actions.push({yearId:year.id,key:`${year.id}:${days}:${admin.id}:${channel}`,channel,userId:admin.id,message});
   }
@@ -124,9 +123,6 @@ export async function processNotices(deadline=performance.now()+6500,keyPrefix?:
 export async function runScheduledWork() {
   const started=performance.now();await enqueueNotices();await enqueueTrainingReminders();const notices=await processNotices(started+7500);
   await prisma.authSession.deleteMany({where:{expiresAt:{lt:new Date()}}});await prisma.rateLimit.deleteMany({where:{resetAt:{lt:new Date()}}});await prisma.pendingUpload.deleteMany({where:{expiresAt:{lt:new Date()}}});
-  if(process.env.RETENTION_ENABLED==='true'&&performance.now()-started<6500) {
-    const policies=await prisma.retentionPolicy.findMany({where:{autoDelete:true,legalHold:false},select:{fiscalYearId:true}});
-    for(const policy of policies) {if(performance.now()-started>7000)break;const preview=await purgeYear(null,policy.fiscalYearId,new Date(),true);if(preview.ready)await purgeYear(null,policy.fiscalYearId,new Date(),false);}
-  }
+  // Annual deletion always requires an authenticated admin's explicit action.
   return {notices};
 }

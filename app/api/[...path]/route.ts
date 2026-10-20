@@ -12,7 +12,7 @@ import {reportData} from '@/lib/reports';
 import {persistExport,type ExportKind,type ExportFormat} from '@/lib/exports';
 import {beginUpload,uploadChunk,finishUpload,fileResponse} from '@/lib/uploads';
 import {createArchive} from '@/lib/archive';
-import {retentionPreview,changeYearState,savePolicy,receiveArchive,approveDeletion,purgeYear} from '@/lib/retention';
+import {retentionPreview,changeYearState,savePolicy,receiveArchive,approveDeletion,purgeYear,releaseArchive} from '@/lib/retention';
 import {processNotices,queueAdminEmailTest,retryAdminEmail} from '@/lib/notifications';
 import {safeCell} from '@/lib/calendar';
 import {removeRegistration} from '@/lib/registrations';
@@ -50,7 +50,7 @@ export async function GET(request:Request,context:Context) {
     }
     if(path[0]==='admin') {
       assertAdmin(actor);
-      if(path[1]==='retention'&&path[2]) {const p=await retentionPreview(path[2]);return NextResponse.json({ready:p.ready,reasons:p.reasons,counts:p.counts,archive:p.archive},{headers:{'Cache-Control':'no-store'}});}
+      if(path[1]==='retention'&&path[2]) {const p=await retentionPreview(path[2]);return NextResponse.json({ready:p.ready,reasons:p.reasons,counts:p.counts,payloadBytes:p.payloadBytes,archive:p.archive},{headers:{'Cache-Control':'no-store'}});}
       if(path[1]==='archives'&&path.length===3) {
         const file=await withColdStartRetry(()=>prisma.archiveManifest.findUnique({where:{id:path[2]},select:{data:true,fiscalYearId:true}}));if(!file?.data)throw new AppError(404,'ไม่พบชุดสำรอง');await audit(prisma,actor,'download_archive','archive_manifests',path[2],undefined,file.fiscalYearId);return fileResponse(file.data,`backup-${path[2]}.zip`,'application/zip');
       }
@@ -137,7 +137,8 @@ export async function POST(request:Request,context:Context) {
         return done(request,'/admin/retention?fiscalYearId='+id);
       }
       else if(_kind==='archives'&&id) {
-        if(action==='receive'||action==='approve') {if(!['1','true',true,1].includes(data.confirmation as string))throw new AppError(422,'กรุณายืนยันการตรวจไฟล์');if(action==='receive')await receiveArchive(actor,id);else await approveDeletion(actor,id,String(data.comment??''));}
+        if(action==='receive'||action==='approve') {if(!['1','true',true,1].includes(data.confirmation as string))throw new AppError(422,'กรุณายืนยันการตรวจไฟล์');if(action==='receive')await receiveArchive(actor,id,data);else await approveDeletion(actor,id,String(data.comment??''));}
+        else if(action==='release')await releaseArchive(actor,id,data);
         else if(action==='verify')throw new AppError(422,'ทดสอบกู้คืนผ่าน npm run db:restore-check -- '+id+' บนเครื่องผู้ดูแล โดยใช้ RESTORE_DIRECT_URL เป็นฐาน/branch ว่างแยก');
         else throw new AppError(404,'ไม่พบขั้นตอนที่ต้องการ');
         const archive=await prisma.archiveManifest.findUniqueOrThrow({where:{id},select:{fiscalYearId:true}});return done(request,'/admin/retention?fiscalYearId='+archive.fiscalYearId);
