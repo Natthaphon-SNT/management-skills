@@ -4,7 +4,7 @@ import {Prisma} from '@prisma/client';
 import {ZodError} from 'zod';
 import {prisma,withColdStartRetry} from '@/lib/prisma';
 import {assertAdmin,requireActor,validateCsrf,COOKIE,getSession,type Actor} from '@/lib/auth';
-import {AppError,checkOrigin,requestOrigin,asJson} from '@/lib/security';
+import {AppError,checkOrigin,requestOrigin,asJson,sha256} from '@/lib/security';
 import {login,register,changePassword,saveTraining,deleteTraining,saveResult,reviewResult} from '@/lib/actions';
 import {createYear,addScopes,updateScope,removeScope,savePerson,saveAccount,saveMaster,saveKpi} from '@/lib/admin-actions';
 import {getParticipation,audit} from '@/lib/records';
@@ -16,6 +16,7 @@ import {retentionPreview,changeYearState,savePolicy,receiveArchive,approveDeleti
 import {processNotices,queueAdminEmailTest,retryAdminEmail} from '@/lib/notifications';
 import {safeCell} from '@/lib/calendar';
 import {removeRegistration} from '@/lib/registrations';
+import {ANNUAL_REPORT_KIND,removeAnnualReport} from '@/lib/annual-maintenance';
 
 export const runtime='nodejs';
 export const maxDuration=10;
@@ -50,6 +51,13 @@ export async function GET(request:Request,context:Context) {
     }
     if(path[0]==='admin') {
       assertAdmin(actor);
+      if(path[1]==='annual-reports'&&path.length===3){
+        const file=await withColdStartRetry(()=>prisma.exportJob.findFirst({where:{id:path[2],kind:ANNUAL_REPORT_KIND,status:'completed'},select:{data:true,sha256:true,fiscalYearId:true,fiscalYear:{select:{year:true}}}}));
+        if(!file?.data)throw new AppError(404,'ไม่พบ ZIP รายงานประจำปี');
+        if(!file.sha256||sha256(file.data)!==file.sha256)throw new AppError(503,'ไฟล์รายงานตรวจสอบไม่ผ่าน กรุณาแจ้งผู้ดูแล');
+        await audit(prisma,actor,'download_annual_report','export_jobs',path[2],undefined,file.fiscalYearId);
+        return fileResponse(file.data,`annual-reports-${file.fiscalYear.year}.zip`,'application/zip');
+      }
       if(path[1]==='retention'&&path[2]) {const p=await retentionPreview(path[2]);return NextResponse.json({ready:p.ready,reasons:p.reasons,counts:p.counts,payloadBytes:p.payloadBytes,archive:p.archive},{headers:{'Cache-Control':'no-store'}});}
       if(path[1]==='archives'&&path.length===3) {
         const file=await withColdStartRetry(()=>prisma.archiveManifest.findUnique({where:{id:path[2]},select:{data:true,fiscalYearId:true}}));if(!file?.data)throw new AppError(404,'ไม่พบชุดสำรอง');await audit(prisma,actor,'download_archive','archive_manifests',path[2],undefined,file.fiscalYearId);return fileResponse(file.data,`backup-${path[2]}.zip`,'application/zip');
@@ -112,6 +120,10 @@ export async function POST(request:Request,context:Context) {
         return done(request,'/admin?success='+encodeURIComponent(action==='restore'?'กู้คืนรายการแล้ว กรุณาตรวจข้อมูลและเปิดใช้งานอีกครั้ง':'ลบรายการแล้ว โดยเก็บประวัติรายงานเดิมไว้'));
       }
       if(_kind==='years'&&!id)await createYear(actor,data);
+      else if(_kind==='annual-reports'&&id&&action==='delete'){
+        const yearId=await removeAnnualReport(actor,id,data);
+        return done(request,'/admin/retention?fiscalYearId='+yearId+'&success='+encodeURIComponent('นำ ZIP รายงานออกแล้ว โดยเก็บหลักฐานที่เก็บภายนอกไว้'));
+      }
       else if(_kind==='years'&&id&&action==='scopes'){
         const result=await addScopes(actor,id);
         return done(request,'/admin?success='+encodeURIComponent(result.message),{ok:true,...result});

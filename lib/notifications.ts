@@ -4,6 +4,7 @@ import {bangkokToday,day,dateOnly} from './calendar';
 import {sha256,randomToken,AppError} from './security';
 import {assertAdmin,type Actor} from './auth';
 import type {Tx} from './records';
+import {storageUsage,enqueueStorageWarnings,createAnnualReport} from './annual-maintenance';
 
 export async function queueAdminEmailTest(actor:Actor,userId:string){
   assertAdmin(actor);
@@ -80,6 +81,10 @@ export async function processNotices(deadline=performance.now()+6500,keyPrefix?:
   let processed=0;
   const deliver=async(notice:typeof notices[number])=> {
     if(performance.now()+750>deadline)return;
+    if(notice.idempotencyKey.startsWith('storage-warning:')){
+      const level=Number(notice.idempotencyKey.split(':')[1]);
+      if((await storageUsage()).percent<level){await prisma.notification.update({where:{id:notice.id},data:{status:'cancelled',leaseUntil:null}});return;}
+    }
     if(notice.idempotencyKey.startsWith('registration:')) {
       const account=await prisma.user.findUnique({where:{id:notice.idempotencyKey.split(':')[1]},select:{approvedAt:true,active:true}});
       if(!account||account.approvedAt||!account.active){await prisma.notification.update({where:{id:notice.id},data:{status:'cancelled',leaseUntil:null}});return;}
@@ -98,9 +103,10 @@ export async function processNotices(deadline=performance.now()+6500,keyPrefix?:
         const transport=nodemailer.createTransport({url:process.env.SMTP_URL,connectionTimeout:5500,greetingTimeout:5000,socketTimeout:5000});
         const origin=process.env.APP_URL||(process.env.VERCEL_PROJECT_PRODUCTION_URL?`https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`:'');
         const trainingEvent=notice.idempotencyKey.startsWith('training-saved:')||notice.idempotencyKey.startsWith('result-submitted:');
-        const target=trainingEvent?'/trainings/'+notice.idempotencyKey.split(':')[1]:notice.idempotencyKey.startsWith('registration:')?'/admin#accounts':'/admin/notices';
+        const maintenance=notice.idempotencyKey.startsWith('storage-warning:')||notice.idempotencyKey.startsWith('annual-report-');
+        const target=trainingEvent?'/trainings/'+notice.idempotencyKey.split(':')[1]:notice.idempotencyKey.startsWith('registration:')?'/admin#accounts':notice.idempotencyKey.startsWith('annual-report-')?'/admin/retention?fiscalYearId='+notice.fiscalYearId:maintenance?'/admin/retention':'/admin/notices';
         const text=notice.message+(origin?`\n\nเปิดระบบ: ${origin.replace(/\/$/,'')}${target}`:'');
-        const subject=notice.idempotencyKey.startsWith('training-saved:')?'แจ้งบันทึกข้อมูลการอบรม กองคลัง':notice.idempotencyKey.startsWith('result-submitted:')?'แจ้งส่งผลการนำความรู้ไปใช้ กองคลัง':notice.idempotencyKey.startsWith('email-test:')?'ทดสอบอีเมลแจ้งเตือน กองคลัง':notice.idempotencyKey.startsWith('registration:')?'สมาชิกใหม่รออนุมัติ กองคลัง':notice.idempotencyKey.startsWith('training-result:')?'แจ้งเตือนกำหนดรายงานผลอบรม กองคลัง':'แจ้งเตือนข้อมูลรายปี กองคลัง';
+        const subject=notice.idempotencyKey.startsWith('storage-warning:')?'แจ้งเตือนพื้นที่ฐานข้อมูลใกล้เต็ม กองคลัง':notice.idempotencyKey.startsWith('annual-report-ready:')?'ZIP รายงานประจำปีพร้อมดาวน์โหลด กองคลัง':notice.idempotencyKey.startsWith('annual-report-failed:')?'ตรวจงาน ZIP รายงานประจำปี กองคลัง':notice.idempotencyKey.startsWith('training-saved:')?'แจ้งบันทึกข้อมูลการอบรม กองคลัง':notice.idempotencyKey.startsWith('result-submitted:')?'แจ้งส่งผลการนำความรู้ไปใช้ กองคลัง':notice.idempotencyKey.startsWith('email-test:')?'ทดสอบอีเมลแจ้งเตือน กองคลัง':notice.idempotencyKey.startsWith('registration:')?'สมาชิกใหม่รออนุมัติ กองคลัง':notice.idempotencyKey.startsWith('training-result:')?'แจ้งเตือนกำหนดรายงานผลอบรม กองคลัง':'แจ้งเตือนข้อมูลรายปี กองคลัง';
         let timer:ReturnType<typeof setTimeout>|undefined;
         try {await Promise.race([
           transport.sendMail({from:process.env.MAIL_FROM,to:notice.user.email,subject,text,messageId:`<${sha256(notice.idempotencyKey)}@management-skills.local>`}),
@@ -121,8 +127,14 @@ export async function processNotices(deadline=performance.now()+6500,keyPrefix?:
   return processed;
 }
 export async function runScheduledWork() {
-  const started=performance.now();await enqueueNotices();await enqueueTrainingReminders();const notices=await processNotices(started+7500);
-  await prisma.authSession.deleteMany({where:{expiresAt:{lt:new Date()}}});await prisma.rateLimit.deleteMany({where:{resetAt:{lt:new Date()}}});await prisma.pendingUpload.deleteMany({where:{expiresAt:{lt:new Date()}}});
+  const started=performance.now(),usage=await storageUsage();
+  const storage=await enqueueStorageWarnings(usage);
+  await enqueueNotices();await enqueueTrainingReminders();
+  const annualReport=performance.now()-started<2500?await createAnnualReport(new Date(),usage):{status:'deferred'};
+  // Send maintenance alerts first so a full training queue cannot hide a capacity warning.
+  if(storage.level)await processNotices(Math.min(started+8500,performance.now()+3500),'storage-warning:');
+  const notices=await processNotices(started+8500);
+  if(performance.now()-started<9000){await prisma.authSession.deleteMany({where:{expiresAt:{lt:new Date()}}});await prisma.rateLimit.deleteMany({where:{resetAt:{lt:new Date()}}});await prisma.pendingUpload.deleteMany({where:{expiresAt:{lt:new Date()}}});}
   // Annual deletion always requires an authenticated admin's explicit action.
-  return {notices};
+  return {notices,storage,annualReport};
 }

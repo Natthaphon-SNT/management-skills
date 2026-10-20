@@ -15,6 +15,7 @@ async function main(){
   const {retentionPreview,savePolicy,changeYearState,receiveArchive,approveDeletion,purgeYear,releaseArchive,externalStorage}=await import('../lib/retention');
   try{
     const f=await fixture();
+    const annual=await testDb.exportJob.create({data:{userId:f.admin.id,fiscalYearId:f.year.id,kind:'annual_zip',format:'zip',filters:{automatic:true},dataVersion:f.year.dataVersion,status:'completed',data:Buffer.from('annual report kept until manual removal')}});
     const file=Buffer.from('Synthetic annual attachment');
     await testDb.attachment.create({data:{participationId:f.participations[0].id,originalName:'annual.pdf',mime:'application/pdf',size:file.length,sha256:'fixture',data:file,uploadedBy:f.admin.id}});
     const nextBounds=fiscalBounds(f.year.year+1);
@@ -48,6 +49,7 @@ async function main(){
     await assert.rejects(()=>purgeYear(f.admin,f.year.id,future,false),{status:422});
     await testDb.fiscalYear.update({where:{id:f.year.id},data:{dataVersion:ready.year.dataVersion}});
     await purgeYear(f.admin,f.year.id,future,false);
+    assert.ok((await testDb.exportJob.findUniqueOrThrow({where:{id:annual.id}})).data);
     assert.equal(await testDb.trainingParticipation.count({where:{activity:{fiscalYearId:f.year.id}}}),0);
     assert.equal(await testDb.attachment.count(),0);
     assert.ok(await testDb.trainingActivity.findUnique({where:{id:later.id}}));

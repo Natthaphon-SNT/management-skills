@@ -91,7 +91,7 @@ export async function purgeYear(actor:Actor|null,id:string,at=new Date(),dryRun=
     await tx.pendingUpload.deleteMany({where:{participationId:{in:ids.map(p=>p.id)}}});
     await tx.trainingActivity.deleteMany({where:{fiscalYearId:id}});await tx.planSchedule.deleteMany({where:{fiscalYearId:id}});
     await tx.developmentPlan.deleteMany({where:{id:{in:preview.deletePlanIds}}});await tx.annualPersonnelScope.deleteMany({where:{fiscalYearId:id}});
-    await tx.kPIDefinition.deleteMany({where:{fiscalYearId:id}});await tx.exportJob.deleteMany({where:{fiscalYearId:id}});await tx.notification.deleteMany({where:{fiscalYearId:id}});
+    await tx.kPIDefinition.deleteMany({where:{fiscalYearId:id}});await tx.exportJob.deleteMany({where:{fiscalYearId:id,kind:{not:'annual_zip'}}});await tx.notification.deleteMany({where:{fiscalYearId:id}});
     await tx.auditLog.updateMany({where:{fiscalYearId:id},data:{changes:Prisma.DbNull}});
     await tx.fiscalYear.update({where:{id},data:{state:'purged',dataVersion:{increment:1}}});await audit(tx,actor,'purged','fiscal_years',id,undefined,id,{counts:preview.counts,manifestId:preview.archive?.id});return preview;
   },{timeout:8000});
