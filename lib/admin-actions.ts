@@ -18,7 +18,15 @@ export async function createYear(actor:Actor,data:Record<string,unknown>) {
   },{timeout:8000});
 }
 export async function addScopes(actor:Actor,id:string) {
-  assertAdmin(actor); await prisma.$transaction(async tx=> {await lockYear(tx,id);await snapshot(tx,id);await touchYear(tx,id);await audit(tx,actor,'add_missing_scopes','fiscal_years',id,undefined,id);},{timeout:8000});
+  assertAdmin(actor); return prisma.$transaction(async tx=> {
+    const year=await lockYear(tx,id),result=await snapshot(tx,id);
+    if(result.added)await touchYear(tx,id);
+    await audit(tx,actor,'add_missing_scopes','fiscal_years',id,undefined,id,result);
+    const message=[`ปีงบประมาณ ${year.year}: เพิ่มเข้าฐานได้ ${result.added} คน`,
+      result.missingDepartment.length?`ยังเพิ่มไม่ได้ ${result.missingDepartment.length} คน เพราะยังไม่มีประวัติฝ่ายที่มีผลในปีนี้ กรุณากำหนดฝ่ายในทะเบียนบุคลากรก่อน`:'บุคลากรที่ข้อมูลครบมีอยู่ในฐานแล้ว',
+      result.excluded?`มี ${result.excluded} คนที่นำออกจากฐานไว้ หากต้องการคืนให้กู้จากรายการที่นำออก`:''].filter(Boolean).join(' · ');
+    return {...result,message};
+  },{timeout:8000});
 }
 export async function updateScope(actor:Actor,id:string,data:Record<string,unknown>) {
   assertAdmin(actor); const input=z.object({departmentId:text,included:flag,basis:z.string().trim().min(1).max(1000)}).parse(data);

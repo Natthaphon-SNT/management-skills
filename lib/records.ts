@@ -4,6 +4,7 @@ import { assertOwner } from './auth';
 import { prisma,withColdStartRetry,sqlTable } from './prisma';
 import { AppError,asJson } from './security';
 import { dateOnly } from './calendar';
+import {scopeReadiness} from './annual-scopes';
 export type Tx=Prisma.TransactionClient;
 export async function lockYear(tx:Tx,id:string,open=true) {
   await tx.$queryRaw`SELECT id FROM ${sqlTable('fiscal_years')} WHERE id=${id} FOR UPDATE`;
@@ -27,5 +28,8 @@ export async function getParticipation(id:string,actor:Actor) {
 export async function snapshot(tx:Tx,yearId:string,personId?:string) {
   const year=await tx.fiscalYear.findUniqueOrThrow({where:{id:yearId}});
   const people=await tx.person.findMany({where:{deletedAt:null,...(personId?{id:personId}:{}),hiredOn:{lte:year.endsOn},OR:[{leftOn:null},{leftOn:{gte:year.startsOn}}]},include:{assignments:{where:{startsOn:{lte:year.endsOn},OR:[{endsOn:null},{endsOn:{gte:year.startsOn}}]},orderBy:{startsOn:'asc'}}}});
-  for(const person of people) if(person.assignments[0]) await tx.annualPersonnelScope.upsert({where:{fiscalYearId_personId:{fiscalYearId:yearId,personId:person.id}},update:{},create:{fiscalYearId:yearId,personId:person.id,departmentId:person.assignments[0].departmentId,basis:'snapshot ฝ่ายแรกที่มีผลในปี รวมผู้เข้าระหว่างปี (ค่าเริ่มต้น ปรับได้)'}});
+  const existing=await tx.annualPersonnelScope.findMany({where:{fiscalYearId:yearId},select:{personId:true,included:true}});
+  const readiness=scopeReadiness(year,people,existing);
+  const created=readiness.ready.length?await tx.annualPersonnelScope.createMany({data:readiness.ready.map(p=>({fiscalYearId:yearId,personId:p.id,departmentId:p.departmentId,basis:'snapshot ฝ่ายแรกที่มีผลในปี รวมผู้เข้าระหว่างปี (ค่าเริ่มต้น ปรับได้)'})),skipDuplicates:true}):{count:0};
+  return {added:created.count,existing:readiness.existing,excluded:readiness.excluded,missingDepartment:readiness.missingDepartment};
 }

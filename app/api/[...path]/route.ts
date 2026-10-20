@@ -112,7 +112,10 @@ export async function POST(request:Request,context:Context) {
         return done(request,'/admin?success='+encodeURIComponent(action==='restore'?'กู้คืนรายการแล้ว กรุณาตรวจข้อมูลและเปิดใช้งานอีกครั้ง':'ลบรายการแล้ว โดยเก็บประวัติรายงานเดิมไว้'));
       }
       if(_kind==='years'&&!id)await createYear(actor,data);
-      else if(_kind==='years'&&id&&action==='scopes')await addScopes(actor,id);
+      else if(_kind==='years'&&id&&action==='scopes'){
+        const result=await addScopes(actor,id);
+        return done(request,'/admin?success='+encodeURIComponent(result.message),{ok:true,...result});
+      }
       else if(_kind==='scopes'&&id&&action==='delete'){
         await removeScope(actor,id,data);
         return done(request,'/admin?success='+encodeURIComponent('นำออกจากฐานปีนี้แล้ว รายงานการอบรมเดิมยังอยู่ครบ'));
