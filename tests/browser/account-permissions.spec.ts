@@ -45,3 +45,21 @@ test('แก้สิทธิ์บัญชีรออนุมัติไ�
   saved=await testDb.user.findUniqueOrThrow({where:{id:pending.id}});
   expect(saved.personId).toBe(f.persons[2].id);expect(saved.approvedAt).not.toBeNull();expect(saved.role).toBe('ADMIN');expect(saved.email).toBe('admin@example.invalid');
 });
+
+test('ปุ่มทดสอบอีเมลใช้ผู้รับของแอดมินที่เลือกและแสดงสถานะจริง',async({page})=>{
+  const f=await fixture(),token=randomToken();
+  await testDb.user.update({where:{id:f.user.id},data:{role:'ADMIN',email:'second@example.invalid'}});
+  await testDb.authSession.create({data:{userId:f.admin.id,tokenHash:sha256(sign(token)),csrfToken:randomToken(),expiresAt:new Date(Date.now()+600000)}});
+  await page.context().addCookies([{name:'management_session',value:token,url:'http://127.0.0.1:3001',httpOnly:true,sameSite:'Lax'}]);
+  await page.goto('/admin');
+  const account=page.locator('#accounts details').filter({has:page.locator('summary strong',{hasText:'tester'})});
+  await account.locator('summary').click();
+  await account.getByRole('button',{name:'ทดสอบส่งอีเมล',exact:true}).click();
+  await expect(page.getByRole('status').filter({hasText:'ดำเนินการทดสอบอีเมลแล้ว'})).toBeVisible();
+  // SMTP is explicitly disabled in the browser-test server, even when production env exists.
+  await expect.poll(async()=>(await testDb.notification.findFirst({where:{userId:f.user.id,channel:'email',idempotencyKey:{startsWith:'email-test:'}}}))?.status).toBe('failed');
+  expect(await testDb.notification.count({where:{userId:f.admin.id,idempotencyKey:{startsWith:'email-test:'}}})).toBe(0);
+  await page.reload();await account.locator('summary').click();
+  await expect(account).toContainText('อีเมลล่าสุด: ส่งไม่สำเร็จ');
+  await expect(account).toContainText('SMTP/MAIL_FROM');
+});

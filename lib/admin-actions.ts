@@ -3,7 +3,7 @@ import type {Actor} from './auth';
 import {assertAdmin} from './auth';
 import {prisma,withColdStartRetry,sqlTable} from './prisma';
 import {AppError} from './security';
-import {dateOnly,day,fiscalBounds,FORMULAS,type KpiCode} from './calendar';
+import {dateOnly,day,bangkokToday,fiscalBounds,FORMULAS,type KpiCode} from './calendar';
 import {audit,lockYear,snapshot,touchYear} from './records';
 const text=z.string().trim().min(1,'กรุณากรอกข้อมูลให้ครบ').max(255);
 const optional=z.preprocess(v=>v===''||v===null?undefined:v,z.string().max(5000).optional());
@@ -26,8 +26,8 @@ export async function updateScope(actor:Actor,id:string,data:Record<string,unkno
 }
 export async function savePerson(actor:Actor,data:Record<string,unknown>,id?:string) {
   assertAdmin(actor);
-  const input=z.object({code:text,fullName:text,personnelType:optional,position:optional,hiredOn:date,leftOn:z.preprocess(v=>v===''?undefined:v,date.optional()),active:flag,departmentId:text,effectiveOn:date})
-    .refine(v=>!v.leftOn||v.leftOn>=v.hiredOn,{message:'วันสิ้นสุดงานต้องไม่ก่อนวันเริ่มงาน'}).refine(v=>v.effectiveOn>=v.hiredOn,{message:'วันเริ่มฝ่ายต้องไม่ก่อนวันเริ่มงาน'}).parse(data);
+  const input=z.object({code:text,fullName:text,personnelType:optional,position:optional,hiredOn:date,leftOn:z.preprocess(v=>v===''?undefined:v,date.optional()),active:flag,departmentId:text,effectiveOn:z.preprocess(v=>v===''?undefined:v,date.optional())})
+    .refine(v=>!v.leftOn||v.leftOn>=v.hiredOn,{message:'วันสิ้นสุดการใช้ระบบต้องไม่ก่อนวันเริ่มใช้ระบบ'}).refine(v=>!v.effectiveOn||v.effectiveOn>=v.hiredOn,{message:'วันที่ย้ายฝ่ายต้องไม่ก่อนวันเริ่มใช้ระบบ'}).parse(data);
   return prisma.$transaction(async tx=> {
     // เรียงล็อกทุกปีก่อนแก้ master ป้องกัน snapshot/backup เห็นข้อมูลไม่ครบชุด
     await tx.$queryRaw`SELECT id FROM ${sqlTable('fiscal_years')} ORDER BY id FOR UPDATE`;
@@ -36,9 +36,11 @@ export async function savePerson(actor:Actor,data:Record<string,unknown>,id?:str
     const person=old?await tx.person.update({where:{id},data:values}):await tx.person.create({data:values});
     const latest=await tx.personnelAssignment.findFirst({where:{personId:person.id},orderBy:{startsOn:'desc'}});
     if(!latest||latest.departmentId!==input.departmentId) {
-      if(latest&&input.effectiveOn<=day(latest.startsOn)) throw new AppError(422,'วันย้ายฝ่ายต้องหลังวันเริ่มประวัติฝ่ายล่าสุด');
-      if(latest) await tx.personnelAssignment.update({where:{id:latest.id},data:{endsOn:new Date(+dateOnly(input.effectiveOn)-86400000)}});
-      await tx.personnelAssignment.create({data:{personId:person.id,departmentId:input.departmentId,startsOn:dateOnly(input.effectiveOn)}});
+      const effectiveOn=input.effectiveOn??(latest?bangkokToday():input.hiredOn);
+      if(effectiveOn<input.hiredOn)throw new AppError(422,'วันที่ย้ายฝ่ายต้องไม่ก่อนวันเริ่มใช้ระบบ');
+      if(latest&&effectiveOn<=day(latest.startsOn)) throw new AppError(422,'วันย้ายฝ่ายต้องหลังวันเริ่มประวัติฝ่ายล่าสุด');
+      if(latest) await tx.personnelAssignment.update({where:{id:latest.id},data:{endsOn:new Date(+dateOnly(effectiveOn)-86400000)}});
+      await tx.personnelAssignment.create({data:{personId:person.id,departmentId:input.departmentId,startsOn:dateOnly(effectiveOn)}});
     }
     const openYears=await tx.fiscalYear.findMany({where:{state:'open'},select:{id:true}});
     for(const year of openYears)await snapshot(tx,year.id,person.id);
@@ -94,7 +96,7 @@ export async function adminData(actor:Actor) {
   assertAdmin(actor); return withColdStartRetry(()=>prisma.$transaction(async tx=> {
     const [people,departments,years,strategies,accounts,scopes,kpis]=await Promise.all([
       tx.person.findMany({include:{assignments:{include:{department:true},orderBy:{startsOn:'desc'}}},orderBy:{fullName:'asc'}}),tx.department.findMany(),tx.fiscalYear.findMany({orderBy:{year:'desc'}}),tx.strategy.findMany(),
-      tx.user.findMany({select:{id:true,username:true,name:true,email:true,role:true,active:true,approvedAt:true,personId:true},orderBy:{createdAt:'desc'}}),
+      tx.user.findMany({select:{id:true,username:true,name:true,email:true,role:true,active:true,approvedAt:true,personId:true,notices:{where:{channel:'email'},orderBy:{createdAt:'desc'},take:1,select:{status:true,error:true,sentAt:true,createdAt:true}}},orderBy:{createdAt:'desc'}}),
       tx.annualPersonnelScope.findMany({include:{person:{select:{fullName:true}},department:{select:{name:true}},fiscalYear:{select:{year:true}}},orderBy:{fiscalYear:{year:'desc'}}}),
       tx.kPIDefinition.findMany({include:{target:true,fiscalYear:{select:{year:true}},department:{select:{name:true}},person:{select:{fullName:true}}},orderBy:{createdAt:'desc'}}),
     ]); return {people,departments,years,strategies,accounts,scopes,kpis};

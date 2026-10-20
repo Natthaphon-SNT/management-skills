@@ -13,7 +13,7 @@ import {persistExport,type ExportKind,type ExportFormat} from '@/lib/exports';
 import {beginUpload,uploadChunk,finishUpload,fileResponse} from '@/lib/uploads';
 import {createArchive} from '@/lib/archive';
 import {retentionPreview,changeYearState,savePolicy,receiveArchive,approveDeletion,purgeYear} from '@/lib/retention';
-import {processNotices} from '@/lib/notifications';
+import {processNotices,queueAdminEmailTest,retryAdminEmail} from '@/lib/notifications';
 import {safeCell} from '@/lib/calendar';
 
 export const runtime='nodejs';
@@ -102,7 +102,12 @@ export async function POST(request:Request,context:Context) {
       else if(_kind==='years'&&id&&action==='scopes')await addScopes(actor,id);
       else if(_kind==='scopes'&&id)await updateScope(actor,id,data);
       else if(_kind==='personnel')await savePerson(actor,data,id);
-      else if(_kind==='accounts'&&id)await saveAccount(actor,id,data);
+      else if(_kind==='accounts'&&id&&action==='test-email'){
+        const key=await queueAdminEmailTest(actor,id);
+        await processNotices(performance.now()+4500,key);
+        return done(request,'/admin?success='+encodeURIComponent('ดำเนินการทดสอบอีเมลแล้ว ตรวจสถานะอีเมลล่าสุดของบัญชีนี้')+'#accounts');
+      }
+      else if(_kind==='accounts'&&id){await saveAccount(actor,id,data);try{await retryAdminEmail(id);}catch{console.error('Admin email retry failed; queued for retry');}}
       else if(_kind==='departments'||_kind==='strategies')await saveMaster(actor,_kind==='departments'?'department':'strategy',data,id);
       else if(_kind==='kpis')await saveKpi(actor,data);
       else if(_kind==='notices'&&id==='retry'){await prisma.notification.updateMany({where:{status:'failed',channel:'email',OR:[{leaseUntil:null},{leaseUntil:{lt:new Date()}}]},data:{attempts:0}});await processNotices();}

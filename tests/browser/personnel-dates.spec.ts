@@ -1,0 +1,21 @@
+import {test,expect} from '@playwright/test';
+import {fixture,testDb} from '../fixtures';
+import {randomToken,sha256,sign} from '../../lib/security';
+import {bangkokToday,day} from '../../lib/calendar';
+test.afterAll(()=>testDb.$disconnect());
+test('เพิ่มบุคลากรโดยใช้วันเริ่มใช้ระบบและไม่ต้องทราบวันที่เริ่มฝ่าย',async({page})=>{
+  const f=await fixture(),token=randomToken();
+  await testDb.authSession.create({data:{userId:f.admin.id,tokenHash:sha256(sign(token)),csrfToken:randomToken(),expiresAt:new Date(Date.now()+600000)}});
+  await page.context().addCookies([{name:'management_session',value:token,url:'http://127.0.0.1:3001',httpOnly:true,sameSite:'Lax'}]);
+  await page.goto('/admin');const editor=page.locator('#personnel details').filter({has:page.locator('summary',{hasText:'เพิ่มบุคลากร'})});
+  await editor.locator('summary').click();
+  await expect(editor.getByLabel('วันที่เริ่มใช้ระบบ')).toHaveValue(bangkokToday());
+  await expect(editor.locator('[name=effectiveOn]')).toHaveCount(0);
+  await editor.getByLabel('รหัสบุคลากร').fill('NEW-SYSTEM');await editor.getByLabel('ชื่อ-นามสกุล').fill('บุคลากรใหม่');
+  await editor.getByLabel('ฝ่ายปัจจุบัน / ฝ่ายที่จะย้าย').selectOption(f.departments[1].id);
+  await editor.getByRole('button',{name:'เพิ่มบุคลากร',exact:true}).click();
+  await expect(page.getByRole('status').filter({hasText:'บันทึกข้อมูลแล้ว'})).toBeVisible();
+  const person=await testDb.person.findUniqueOrThrow({where:{code:'NEW-SYSTEM'},include:{assignments:true}});
+  expect(day(person.hiredOn)).toBe(bangkokToday());expect(day(person.assignments[0].startsOn)).toBe(bangkokToday());
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});

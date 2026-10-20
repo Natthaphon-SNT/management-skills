@@ -1,6 +1,6 @@
 import {adminData} from '@/lib/admin-actions';
 import type {Actor} from '@/lib/auth';
-import {KPI_NAMES,STATES,day} from '@/lib/calendar';
+import {KPI_NAMES,STATES,day,bangkokToday} from '@/lib/calendar';
 import {Field,Form,Submit,yesNo} from '../form';
 import {PageHead,Badge} from '../reports';
 type Data=Awaited<ReturnType<typeof adminData>>;
@@ -19,6 +19,7 @@ export async function AdminScreen({actor}:{actor:Actor}) {
 function AccountSection({accounts,people,personOptions}:{accounts:Data['accounts'],people:Data['people'],personOptions:{value:string,label:string}[]}){
   return <section className="card" id="accounts"><h2>บัญชีและการอนุมัติสมาชิก</h2><p className="scope-note">แก้สิทธิ์และอีเมลได้โดยไม่ต้องเชื่อมทะเบียนใหม่ บัญชีรออนุมัติต้องเชื่อมทะเบียนและอนุมัติก่อนจึงเข้าสู่ระบบได้</p>{accounts.map(a=>{
     const person=people.find(p=>p.id===a.personId);
+    const lastEmail=a.notices[0];
     const available=personOptions.filter(p=>p.value===a.personId||!accounts.some(other=>other.personId===p.value));
     return <details key={a.id} className="editor"><summary><strong>{a.username}</strong> · {a.name} <Badge success={!!a.approvedAt} warning={!a.approvedAt}>{a.approvedAt?'อนุมัติแล้ว':'รออนุมัติ'}</Badge> · {a.role}</summary>
       <p className="scope-note">ทะเบียนบุคลากร: {person?`${person.code} · ${person.fullName}`:'ยังไม่เชื่อมทะเบียน'}</p>
@@ -27,6 +28,11 @@ function AccountSection({accounts,people,personOptions}:{accounts:Data['accounts
         <Field name="active" label="สถานะบัญชี" value={a.active?'1':'0'} options={{1:'ใช้งาน',0:'ระงับการใช้งาน'}} empty={false}/>
         <Field name="email" label="อีเมลสำหรับแจ้งเตือน ADMIN" value={a.email} type="email" maxLength={255}/>
       </div><div className="form-actions"><Submit secondary>บันทึกสิทธิ์และอีเมล</Submit></div></Form>
+      {a.role==='ADMIN'&&<>
+        <p className="scope-note">อีเมลในช่องนี้เป็นผู้รับ ระบบใช้อีเมลกลางเป็นผู้ส่งร่วมกันทุกแอดมิน</p>
+        <p className="scope-note">อีเมลล่าสุด: {lastEmail?`${({sent:'ส่งแล้ว',failed:'ส่งไม่สำเร็จ',pending:'รอส่ง',sending:'กำลังส่ง',cancelled:'ยกเลิก'} as Record<string,string>)[lastEmail.status]??lastEmail.status} · ${(lastEmail.sentAt??lastEmail.createdAt).toLocaleString('th-TH',{timeZone:'Asia/Bangkok'})}`:'ยังไม่มีรายการส่ง'}{lastEmail?.error?' · '+lastEmail.error:''}</p>
+        <Form action={'/api/admin/accounts/'+a.id+'/test-email'} returnTo="/admin"><Submit secondary disabled={!a.active||!a.approvedAt||!a.personId||!a.email}>ทดสอบส่งอีเมล</Submit></Form>
+      </>}
       {(!a.approvedAt||!a.personId)&&<Form action={'/api/admin/accounts/'+a.id} returnTo="/admin"><input type="hidden" name="intent" value="approve"/><input type="hidden" name="role" value={a.role}/><input type="hidden" name="active" value={a.active?'1':'0'}/><input type="hidden" name="email" value={a.email??''}/>
         <p className="scope-note">เลือกทะเบียนที่ตรงกับสมาชิก แล้วอนุมัติให้เข้าใช้งาน หากไม่พบให้เพิ่มทะเบียนบุคลากรก่อน</p>
         <Field name="personId" label="เชื่อมทะเบียนบุคลากร" value={a.personId} options={available} required/>
@@ -36,5 +42,16 @@ function AccountSection({accounts,people,personOptions}:{accounts:Data['accounts
   })}</section>;
 }
 function PersonFields({person,departments}:{person?:Data['people'][number],departments:Data['departments']}) {
-  return <div className="form-grid"><Field name="code" label="รหัสบุคลากร" value={person?.code} required maxLength={100}/><Field name="fullName" label="ชื่อ-นามสกุล" value={person?.fullName} required maxLength={255}/><Field name="personnelType" label="ประเภทบุคลากร" value={person?.personnelType} maxLength={255}/><Field name="position" label="ตำแหน่ง" value={person?.position} maxLength={255}/><Field name="hiredOn" label="วันที่เริ่มปฏิบัติงาน" type="date" value={person?day(person.hiredOn):null} required/><Field name="leftOn" label="วันที่สิ้นสุดปฏิบัติงาน (ถ้ามี)" type="date" value={person?.leftOn?day(person.leftOn):null}/><Field name="active" label="สถานะปฏิบัติงาน" value={person?.active===false?'0':'1'} options={{1:'ปฏิบัติงาน',0:'ไม่ปฏิบัติงาน'}} empty={false}/><Field name="departmentId" label="ฝ่ายปัจจุบัน / ฝ่ายที่จะย้าย" value={person?.assignments[0]?.departmentId} options={departments.map(d=>({value:d.id,label:d.name}))} required/><Field name="effectiveOn" label="วันที่เริ่มฝ่าย / วันที่ย้ายมีผล" type="date" value={person?.assignments[0]?day(person.assignments[0].startsOn):null} required/></div>;
+  return <div className="form-grid">
+    <Field name="code" label="รหัสบุคลากร" value={person?.code} required maxLength={100}/>
+    <Field name="fullName" label="ชื่อ-นามสกุล" value={person?.fullName} required maxLength={255}/>
+    <Field name="personnelType" label="ประเภทบุคลากร" value={person?.personnelType} maxLength={255}/>
+    <Field name="position" label="ตำแหน่ง" value={person?.position} maxLength={255}/>
+    <Field name="hiredOn" label="วันที่เริ่มใช้ระบบ" type="date" value={person?day(person.hiredOn):bangkokToday()} required/>
+    <Field name="leftOn" label="วันที่สิ้นสุดการใช้ระบบ (ถ้ามี)" type="date" value={person?.leftOn?day(person.leftOn):null}/>
+    <Field name="active" label="สถานะบุคลากร" value={person?.active===false?'0':'1'} options={{1:'ใช้งาน',0:'ไม่ใช้งาน'}} empty={false}/>
+    <Field name="departmentId" label="ฝ่ายปัจจุบัน / ฝ่ายที่จะย้าย" value={person?.assignments[0]?.departmentId} options={departments.map(d=>({value:d.id,label:d.name}))} required/>
+    {person&&<Field name="effectiveOn" label="วันที่ย้ายฝ่ายมีผล (เว้นว่างใช้วันนี้)" type="date"/>}
+    <p className="scope-note wide">ไม่ต้องทราบวันที่เริ่มงานหรือวันที่เริ่มฝ่ายจริง เมื่อเพิ่มบุคลากร ระบบใช้ฝ่ายที่เลือกตั้งแต่วันที่เริ่มใช้ระบบ วันที่ย้ายฝ่ายใช้เฉพาะเมื่อเปลี่ยนฝ่ายภายหลัง</p>
+  </div>;
 }

@@ -1,9 +1,30 @@
 import nodemailer from 'nodemailer';
 import {prisma} from './prisma';
 import {bangkokToday,day,dateOnly} from './calendar';
-import {sha256} from './security';
+import {sha256,randomToken,AppError} from './security';
+import {assertAdmin,type Actor} from './auth';
 import {purgeYear} from './retention';
 import type {Tx} from './records';
+
+export async function queueAdminEmailTest(actor:Actor,userId:string){
+  assertAdmin(actor);
+  const user=await prisma.user.findUnique({where:{id:userId},select:{role:true,active:true,approvedAt:true,personId:true,email:true}});
+  if(!user||user.role!=='ADMIN'||!user.active||!user.approvedAt||!user.personId)throw new AppError(422,'ผู้รับต้องเป็น ADMIN ที่อนุมัติ เชื่อมทะเบียน และเปิดใช้งานแล้ว');
+  if(!user.email)throw new AppError(422,'กรุณาบันทึกอีเมลของแอดมินก่อนทดสอบส่ง');
+  const year=await prisma.fiscalYear.findFirst({where:{state:{not:'purged'}},orderBy:{year:'desc'},select:{id:true}});
+  if(!year)throw new AppError(422,'กรุณาสร้างปีงบประมาณก่อนทดสอบส่ง');
+  const key=`email-test:${userId}:${randomToken()}`;
+  await prisma.notification.create({data:{userId,fiscalYearId:year.id,idempotencyKey:key,channel:'email',message:`ทดสอบอีเมลแจ้งเตือนกองคลัง ผู้รับ: ${user.email} หากได้รับข้อความนี้ แสดงว่าผู้ให้บริการอีเมลรับข้อความทดสอบจากระบบแล้ว`,status:'pending'}});
+  return key;
+}
+
+export async function retryAdminEmail(userId:string){
+  const deadline=performance.now()+4500;
+  const user=await prisma.user.findUnique({where:{id:userId},select:{role:true,active:true,approvedAt:true,personId:true,email:true}});
+  if(!user||user.role!=='ADMIN'||!user.active||!user.approvedAt||!user.personId||!user.email)return;
+  await prisma.notification.updateMany({where:{userId,channel:'email',status:'failed',OR:[{leaseUntil:null},{leaseUntil:{lt:new Date()}}]},data:{attempts:0}});
+  await processNotices(deadline,undefined,userId);
+}
 
 export async function enqueueRegistrationNotices(tx:Tx,user:{id:string,name:string,username:string},departmentName:string,at=new Date()) {
   const today=dateOnly(bangkokToday(at));
@@ -46,11 +67,11 @@ export async function enqueueNotices(at=new Date(),dryRun=false) {
   if(!dryRun)await prisma.notification.createMany({data:actions.map(a=>({fiscalYearId:a.yearId,idempotencyKey:a.key,channel:a.channel,userId:a.userId,message:a.message,status:a.channel==='system'?'failed':'pending',error:a.channel==='system'?'ไม่มี ADMIN รับผิดชอบ ห้ามดำเนินการลบ':null})),skipDuplicates:true});
   return actions;
 }
-export async function processNotices(deadline=performance.now()+6500,keyPrefix?:string) {
-  const notices=await prisma.notification.findMany({where:{...(keyPrefix?{idempotencyKey:{startsWith:keyPrefix}}:{}),channel:{in:['in_app','email']},status:{in:['pending','failed','sending']},attempts:{lt:10},OR:[{leaseUntil:null},{leaseUntil:{lt:new Date()}}]},include:{user:{select:{id:true,role:true,active:true,approvedAt:true,email:true}}},orderBy:{createdAt:'asc'},take:20});
+export async function processNotices(deadline=performance.now()+6500,keyPrefix?:string,userId?:string) {
+  const notices=await prisma.notification.findMany({where:{...(keyPrefix?{idempotencyKey:{startsWith:keyPrefix}}:{}),...(userId?{userId}:{}),channel:{in:['in_app','email']},status:{in:['pending','failed','sending']},attempts:{lt:10},OR:[{leaseUntil:null},{leaseUntil:{lt:new Date()}}]},include:{user:{select:{id:true,role:true,active:true,approvedAt:true,email:true}}},orderBy:{createdAt:'asc'},take:20});
   let processed=0;
   for(const notice of notices) {
-    if(performance.now()>deadline)break;
+    if(performance.now()+750>deadline)break;
     if(notice.idempotencyKey.startsWith('registration:')) {
       const account=await prisma.user.findUnique({where:{id:notice.idempotencyKey.split(':')[1]},select:{approvedAt:true,active:true}});
       if(!account||account.approvedAt||!account.active){await prisma.notification.update({where:{id:notice.id},data:{status:'cancelled',leaseUntil:null}});continue;}
@@ -66,15 +87,20 @@ export async function processNotices(deadline=performance.now()+6500,keyPrefix?:
       if(!notice.user?.active||!notice.user.approvedAt||notice.user.role!=='ADMIN')throw new Error('ผู้รับไม่ใช่ ADMIN ที่ใช้งานอยู่');
       if(notice.channel==='email') {
         if(!notice.user.email||!process.env.SMTP_URL||!process.env.MAIL_FROM)throw new Error('ยังไม่ได้กำหนดอีเมล ADMIN หรือ SMTP/MAIL_FROM');
-        const transport=nodemailer.createTransport({url:process.env.SMTP_URL,connectionTimeout:2000,greetingTimeout:2000,socketTimeout:2500});
+        const transport=nodemailer.createTransport({url:process.env.SMTP_URL,connectionTimeout:3000,greetingTimeout:3000,socketTimeout:3000});
         const origin=process.env.APP_URL||(process.env.VERCEL_PROJECT_PRODUCTION_URL?`https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`:'');
         const text=notice.message+(origin?`\n\nเปิดระบบ: ${origin.replace(/\/$/,'')}${notice.idempotencyKey.startsWith('registration:')?'/admin#accounts':'/admin/notices'}`:'');
-        const subject=notice.idempotencyKey.startsWith('registration:')?'สมาชิกใหม่รออนุมัติ กองคลัง':notice.idempotencyKey.startsWith('training-result:')?'แจ้งเตือนกำหนดรายงานผลอบรม กองคลัง':'แจ้งเตือนข้อมูลรายปี กองคลัง';
-        try {await transport.sendMail({from:process.env.MAIL_FROM,to:notice.user.email,subject,text,messageId:`<${sha256(notice.idempotencyKey)}@management-skills.local>`});}finally{transport.close();}
+        const subject=notice.idempotencyKey.startsWith('email-test:')?'ทดสอบอีเมลแจ้งเตือน กองคลัง':notice.idempotencyKey.startsWith('registration:')?'สมาชิกใหม่รออนุมัติ กองคลัง':notice.idempotencyKey.startsWith('training-result:')?'แจ้งเตือนกำหนดรายงานผลอบรม กองคลัง':'แจ้งเตือนข้อมูลรายปี กองคลัง';
+        let timer:ReturnType<typeof setTimeout>|undefined;
+        try {await Promise.race([
+          transport.sendMail({from:process.env.MAIL_FROM,to:notice.user.email,subject,text,messageId:`<${sha256(notice.idempotencyKey)}@management-skills.local>`}),
+          new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(new Error('SMTP timeout'),{code:'ETIMEDOUT'})),Math.max(1,Math.min(3500,deadline-performance.now()-300)));}),
+        ]);}finally{if(timer)clearTimeout(timer);transport.close();}
       }
       await prisma.notification.update({where:{id:notice.id},data:{status:'sent',sentAt:new Date(),error:null,leaseUntil:null}});
     }catch(error) {
-      const message=error instanceof Error&&/ADMIN|SMTP/.test(error.message)?error.message:'ส่งอีเมลไม่สำเร็จ กรุณาตรวจผู้ให้บริการ SMTP';
+      const code=(error as {code?:string})?.code;
+      const message=code==='ETIMEDOUT'?'SMTP ตอบช้าเกินเวลาที่กำหนด ระบบจะลองส่งใหม่':code==='EAUTH'?'SMTP ยืนยันตัวตนไม่ผ่าน กรุณาตรวจบัญชีผู้ส่งและ App Password':code==='EENVELOPE'?'SMTP ปฏิเสธผู้ส่งหรือผู้รับ กรุณาตรวจอีเมล':error instanceof Error&&['ผู้รับไม่ใช่ ADMIN ที่ใช้งานอยู่','ยังไม่ได้กำหนดอีเมล ADMIN หรือ SMTP/MAIL_FROM'].includes(error.message)?error.message:'ส่งอีเมลไม่สำเร็จ กรุณาตรวจผู้ให้บริการ SMTP';
       await prisma.notification.update({where:{id:notice.id},data:{status:'failed',error:message,leaseUntil:null}});
     }processed++;
   }return processed;

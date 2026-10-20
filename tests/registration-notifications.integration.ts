@@ -6,10 +6,10 @@ async function main(){
   process.env.DATABASE_URL=testUrl;process.env.DIRECT_URL=testUrl;
   delete process.env.SMTP_URL;delete process.env.MAIL_FROM;
   const {register}=await import('../lib/actions');
-  const {enqueueRegistrationNotices,processNotices}=await import('../lib/notifications');
+  const {enqueueRegistrationNotices,processNotices,queueAdminEmailTest,retryAdminEmail}=await import('../lib/notifications');
   const {prisma}=await import('../lib/prisma');
   const messages:string[]=[];
-  let reject=false;
+  let reject=false,stall=false;
   const server=net.createServer(socket=>{
     socket.setEncoding('utf8');socket.write('220 localhost test SMTP\r\n');
     let input='',data=false,body='';
@@ -17,7 +17,7 @@ async function main(){
       input+=chunk;
       while(input.includes('\r\n')){
         const end=input.indexOf('\r\n'),line=input.slice(0,end);input=input.slice(end+2);
-        if(data){if(line==='.') {data=false;if(!reject)messages.push(body);socket.write(reject?'550 rejected for test\r\n':'250 accepted\r\n');body='';}else body+=line+'\r\n';continue;}
+        if(data){if(line==='.') {data=false;if(!stall){if(!reject)messages.push(body);socket.write(reject?'550 rejected for test\r\n':'250 accepted\r\n');}body='';}else body+=line+'\r\n';continue;}
         if(/^EHLO|^HELO/.test(line))socket.write('250 localhost\r\n');
         else if(line==='DATA'){data=true;socket.write('354 send data\r\n');}
         else if(line==='QUIT'){socket.end('221 bye\r\n');}
@@ -61,6 +61,28 @@ async function main(){
     await processNotices(performance.now()+4000,'registration:');
     assert.equal((await testDb.notification.findFirstOrThrow({where:{idempotencyKey:{startsWith:`registration:${second.id}:`},channel:'email'}})).status,'cancelled');
     assert.equal(messages.length,1);
+    // Each admin has a separate recipient. A missing address must not block the other admin.
+    await testDb.user.update({where:{id:f.user.id},data:{role:'ADMIN'}});
+    await register({...data,username:'multiple_admins'},'127.0.0.11');
+    const third=await testDb.user.findUniqueOrThrow({where:{username:'multiple_admins'}});
+    const prefix=`registration:${third.id}:`;
+    await processNotices(performance.now()+5000,prefix);
+    assert.equal(await testDb.notification.count({where:{idempotencyKey:{startsWith:prefix},channel:'email',status:'sent'}}),1);
+    assert.equal(await testDb.notification.count({where:{idempotencyKey:{startsWith:prefix},channel:'email',status:'failed'}}),1);
+    await testDb.user.update({where:{id:f.user.id},data:{email:'second@example.invalid'}});
+    const beforeRetry=messages.length;await retryAdminEmail(f.user.id);
+    assert.equal(messages.length,beforeRetry+1);assert.ok(messages.at(-1)!.includes('second@example.invalid'));
+    assert.equal(await testDb.notification.count({where:{idempotencyKey:{startsWith:prefix},channel:'email',status:'sent'}}),2);
+    await assert.rejects(()=>queueAdminEmailTest(f.user,f.admin.id),{status:403});
+    await assert.rejects(()=>queueAdminEmailTest(f.admin,third.id),{status:422});
+    const testKey=await queueAdminEmailTest(f.admin,f.user.id);
+    await processNotices(performance.now()+4000,testKey);
+    assert.equal((await testDb.notification.findUniqueOrThrow({where:{idempotencyKey:testKey}})).status,'sent');
+    const slowKey=await queueAdminEmailTest(f.admin,f.user.id);stall=true;
+    const started=performance.now();await processNotices(started+1100,slowKey);
+    const slow=await testDb.notification.findUniqueOrThrow({where:{idempotencyKey:slowKey}});
+    assert.equal(slow.status,'failed');assert.ok(slow.error?.includes('SMTP ตอบช้า'));assert.ok(performance.now()-started<2000);
+    stall=false;
     console.log('PASS: registration queue, recipients, dedup, missing SMTP, rejected SMTP, successful local SMTP, no duplicate send, stale approval cancellation (no external email sent)');
   }finally{server.close();await prisma.$disconnect();await testDb.$disconnect();}
 }
