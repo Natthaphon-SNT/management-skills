@@ -1,0 +1,45 @@
+{
+  "name": "rmutt-management-skills",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "postinstall": "prisma generate",
+    "build": "prisma migrate deploy && next build",
+    "start": "next start",
+    "db:seed": "prisma db seed",
+    "db:restore-check": "tsx scripts/restore-check.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit"
+  },
+  "prisma": { "seed": "tsx prisma/seed.ts" },
+  "engines": { "node": "24.x" },
+  "dependencies": {
+    "@prisma/client": "6.19.3",
+    "bcryptjs": "^3.0.3",
+    "exceljs": "^4.4.0",
+    "file-type": "^21.0.0",
+    "jszip": "^3.10.1",
+    "next": "16.4.2",
+    "nodemailer": "^10.1.7",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "^4.3.0"
+  },
+  "overrides": {
+    "deepmerge-ts": "^8.0.0",
+    "uuid": "^11.1.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "@types/node": "^24.0.0",
+    "@types/nodemailer": "^7.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "dotenv": "^17.0.0",
+    "prisma": "6.19.3",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}

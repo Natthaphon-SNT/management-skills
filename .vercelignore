@@ -1,0 +1,10 @@
+finance-skills/
+.agents/
+.claude/
+.codex/
+skills-lock.json
+tests/
+test-results/
+playwright-report/
+.env*
+!.env.example

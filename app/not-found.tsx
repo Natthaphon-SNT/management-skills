@@ -1,0 +1,1 @@
+export default function NotFound(){return <main id="main-content" className="page-error card"><p className="eyebrow">404</p><h1>ไม่พบหน้าหรือข้อมูลที่ต้องการ</h1><a className="button" href="/dashboard">กลับหน้าหลัก</a></main>;}

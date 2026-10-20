@@ -1,0 +1,36 @@
+@extends('layouts.app')
+@section('title','จัดเก็บและสำรองรายปี')
+@section('content')
+@php($fy=$preview['year']) @php($policy=$preview['policy'])
+<div class="page-head"><div><p class="eyebrow">ANNUAL DATA LIFECYCLE</p><h1>จัดเก็บและสำรองรายปี</h1><p>ปิดปี สำรอง ทดสอบกู้คืน และอนุมัติลบเป็นคนละขั้นตอน</p></div><span class="badge">การลบอัตโนมัติ: {{ config('skills.retention_enabled')?'เปิดในระบบ':'ปิดในระบบ' }}</span></div>
+<section class="card"><form method="get" class="export-form"><x-select name="fiscal_year_id" label="เลือกปีงบประมาณ" :options="$years->pluck('year','id')" :value="$fy->id" :empty="false" /><button class="button secondary">แสดงข้อมูลปีนี้</button></form></section>
+<section class="card"><div class="card-title"><h2>ปีงบประมาณ {{ $fy->year }}</h2><span class="badge">{{ $fy->state }} · รุ่น {{ $fy->data_version }}</span></div>
+<p class="notice">สิ้นปี {{ $fy->ends_on }} เวลา 23:59:59 Asia/Bangkok · การสิ้นปีไม่ทำให้ข้อมูลถูกลบโดยอัตโนมัติ</p>
+<form action="/admin/retention/{{ $fy->id }}/state" method="post" class="export-form">@csrf<x-select name="state" label="สถานะปี" :options="['open'=>'เปิดรับการแก้ไข','closed'=>'ปิดปี','archived'=>'ย้ายเข้า archive (ยังไม่ลบ)']" :value="$fy->state" :empty="false" /><button class="button secondary">บันทึกสถานะปี</button></form></section>
+<section class="card"><h2>นโยบายระยะเก็บรักษา</h2><p class="scope-note">กำหนดตามนโยบายที่หน่วยงานอนุมัติ ระบบเก็บข้อมูลที่สัมพันธ์กันจนถึงวันครบกำหนดที่ช้าที่สุดของทุกประเภท แล้วจึงเริ่มระยะผ่อนผัน ไม่ตัดความสัมพันธ์ข้อมูลกลางปี</p>
+@php($dueDates=$policy?->type_due_dates?json_decode($policy->type_due_dates,true):[])
+<form action="/admin/retention/{{ $fy->id }}/policy" method="post">@csrf<div class="form-grid">
+@foreach(['plans'=>'แผน IDP','training'=>'การอบรม','results'=>'ผลและการตรวจทาน','attachments'=>'หลักฐานแนบ'] as $key=>$text)
+<x-input :name="'type_due_dates['.$key.']'" :label="'วันครบกำหนดเก็บรักษา: '.$text" type="date" :value="$dueDates[$key]??null" :min="$fy->ends_on" :required="true" />@endforeach
+<x-input name="grace_days" label="ระยะผ่อนผันก่อนลบ (วัน)" type="number" min="0" max="3650" :value="$policy?->grace_days??30" :required="true" />
+<x-input name="notice_days" label="แจ้งก่อนสิ้นปี (วัน คั่นด้วย comma)" :value="$policy?implode(',',json_decode($policy->notice_days,true)):'30,7,1'" pattern="[0-9]+(,[0-9]+)*" :required="true" />
+<x-input name="backup_retention_days" label="เก็บ backup หลังลบข้อมูล (วัน)" type="number" min="1" max="36500" :value="$policy?->backup_retention_days" :required="true" />
+<x-input name="archive_retention_days" label="เก็บรายงาน archive หลังลบข้อมูล (วัน)" type="number" min="1" max="36500" :value="$policy?->archive_retention_days" :required="true" />
+<x-select name="legal_hold" label="พักการลบ / อยู่ระหว่างตรวจสอบ" :options="[1=>'พักการลบ',0=>'ไม่มีการพักลบ']" :value="(int)($policy?->legal_hold??true)" :empty="false" />
+<x-select name="auto_delete" label="อนุญาตงานลบอัตโนมัติสำหรับปีนี้" :options="[0=>'ปิด',1=>'เปิดเมื่อผ่านทุกเงื่อนไข']" :value="(int)($policy?->auto_delete??false)" :empty="false" />
+<x-textarea name="policy_reference" label="เลขที่ / แหล่งอ้างอิงนโยบายที่อนุมัติ" :value="$policy?->policy_reference" :required="true" maxlength="5000" /></div>
+<button class="button secondary" style="margin-top:18px">รับรองและบันทึกนโยบาย</button></form></section>
+<section class="card"><div class="card-title"><div><h2>ชุดสำรองและผลทดสอบกู้คืน</h2><p>ZIP มีข้อมูลฐานระบบ ไฟล์หลักฐาน รายงาน และ manifest พร้อม checksum</p></div><form action="/admin/retention/{{ $fy->id }}/archive" method="post">@csrf<button class="button">สร้างชุดสำรองใหม่</button></form></div>
+<p class="scope-note">ชุดสำรองมีข้อมูลส่วนบุคคล ต้องเก็บในพื้นที่ private · ทดสอบกู้คืนลง RESTORE_DB_DATABASE ที่ว่างและแยกจากฐานหลัก · สำเนา ZIP รุ่นเก่าต้องอยู่ในคลัง backup ที่ผู้ดูแลสำรองต่างหาก ไม่ฝังซ้ำซ้อนใน ZIP รุ่นใหม่</p>
+@forelse($archives as $archive)<details class="editor"><summary>ชุด #{{ $archive->id }} · {{ $archive->created_at }} · รุ่นข้อมูล {{ $archive->data_version }} <span class="badge">{{ $archive->state }}</span></summary>
+<p class="scope-note">SHA-256: <code style="overflow-wrap:anywhere">{{ $archive->sha256 }}</code><br>ทดสอบกู้คืน: {{ $archive->restore_tested_at??'ยังไม่ผ่าน' }} · รับไฟล์: {{ $archive->received_at??'ยังไม่ยืนยัน' }}</p><pre>{{ json_encode(json_decode($archive->counts),JSON_PRETTY_PRINT) }}</pre>
+<div class="actions"><a href="/admin/archives/{{ $archive->id }}" class="button secondary small">ดาวน์โหลด ZIP</a><form action="/admin/archives/{{ $archive->id }}/verify" method="post">@csrf<button class="button secondary small">ทดสอบกู้คืนในฐานแยก</button></form></div>
+<form action="/admin/archives/{{ $archive->id }}/receive" method="post" style="margin-top:20px">@csrf<label class="check-option"><input type="checkbox" name="confirmation" value="1" required> ยืนยันว่าดาวน์โหลด รับ และตรวจไฟล์ชุดนี้แล้ว</label><button class="button secondary small" style="margin-top:10px">บันทึกการรับไฟล์</button></form>
+<form action="/admin/archives/{{ $archive->id }}/approve" method="post" class="stack" style="margin-top:20px">@csrf<x-textarea name="comment" label="เหตุผล / หนังสืออนุมัติลบ" :required="true" maxlength="5000" /><label class="check-option"><input type="checkbox" name="confirmation" value="1" required> อนุมัติการลบเฉพาะชุดและรุ่นข้อมูลนี้ เมื่อครบทุกเงื่อนไข</label><button class="button secondary small">บันทึกใบอนุมัติลบ</button></form></details>
+@empty<div class="empty"><h3>ยังไม่มีชุดสำรอง</h3><p>สร้างชุดใหม่หลังปิดปีและรับรองนโยบายแล้ว</p></div>@endforelse</section>
+<section class="card"><h2>ตรวจรายการก่อนลบ (dry-run)</h2><div class="retention-counts">@foreach($preview['counts'] as $key=>$count)<span>{{ $key }}: <strong>{{ $count }}</strong></span>@endforeach</div>
+@if($preview['ready'])<div class="alert success">ครบเงื่อนไขสำหรับชุดข้อมูลนี้แล้ว</div>@else<div class="alert danger"><strong>พักการลบ</strong><ul>@foreach($preview['reasons'] as $reason)<li>{{ $reason }}</li>@endforeach</ul></div>@endif
+<p class="scope-note">ไม่ลบบุคลากร บัญชี ฝ่าย หรือข้อมูลหลักที่ปีอื่นใช้งาน แผนที่มีเป้าหมายข้ามปีหรือมีการอบรมปีอื่นอ้างถึงจะเก็บไว้ (preserved_shared_plans) งานล้างไฟล์ตรวจการอ้างอิงซ้ำอีกครั้ง</p>
+<form action="/admin/retention/{{ $fy->id }}/execute" method="post" class="export-form">@csrf<x-input name="confirmation" :label="'พิมพ์ ลบปี '.$fy->year.' เพื่อยืนยัน'" :required="true" /><button class="button danger" @disabled(!$preview['ready'])>ลบข้อมูลของปีนี้ถาวร</button></form></section>
+<section class="card"><div class="card-title"><h2>การส่งแจ้งเตือนประจำปี</h2><a href="/admin/notices.csv?fiscal_year_id={{ $fy->id }}">ส่งออก CSV ทั้งปี ↧</a></div><p class="scope-note">งาน queue ที่ล้มเหลว: {{ $failedJobs }} · ตรวจอีเมล ADMIN และ SMTP หากส่งไม่สำเร็จ</p><div class="table-wrap" tabindex="0"><table><thead><tr><th>ผู้รับ ID</th><th>ช่องทาง</th><th>สถานะ</th><th>ครั้งที่ส่ง</th><th>ปัญหา</th></tr></thead><tbody>@forelse($notices as $notice)<tr><td>{{ $notice->user_id??'ไม่มี ADMIN' }}</td><td>{{ $notice->channel }}</td><td>{{ $notice->status }}</td><td>{{ $notice->attempts }}</td><td class="course">{{ $notice->error??'—' }}</td></tr>@empty<tr><td colspan="5">ยังไม่ถึงรอบแจ้งเตือน หรือยังไม่มีการแจ้งเตือน</td></tr>@endforelse</tbody></table></div></section>
+@endsection

@@ -1,0 +1,434 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Department {
+  id        String @id @default(cuid())
+  name      String @unique
+  active    Boolean @default(true)
+  assignments PersonnelAssignment[]
+  scopes AnnualPersonnelScope[]
+  participations TrainingParticipation[]
+  registrations User[]
+  kpis KPIDefinition[]
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  @@map("departments")
+}
+model Person {
+  id String @id @default(cuid())
+  code String @unique
+  fullName String
+  personnelType String?
+  position String?
+  hiredOn DateTime @db.Date
+  leftOn DateTime? @db.Date
+  active Boolean @default(true)
+  user User?
+  assignments PersonnelAssignment[]
+  scopes AnnualPersonnelScope[]
+  plans DevelopmentPlan[]
+  participations TrainingParticipation[]
+  kpis KPIDefinition[]
+  audits AuditLog[]
+  uploads PendingUpload[]
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  @@map("personnel")
+}
+model PersonnelAssignment {
+  id String @id @default(cuid())
+  personId String
+  person Person @relation(fields:[personId], references:[id], onDelete:Restrict)
+  departmentId String
+  department Department @relation(fields:[departmentId], references:[id], onDelete:Restrict)
+  startsOn DateTime @db.Date
+  endsOn DateTime? @db.Date
+  @@unique([personId, startsOn])
+  @@map("personnel_assignments")
+}
+model User {
+  id String @id @default(cuid())
+  username String @unique
+  name String
+  email String? @unique
+  passwordHash String
+  role String @default("USER")
+  active Boolean @default(true)
+  approvedAt DateTime? @db.Timestamptz(3)
+  personId String? @unique
+  person Person? @relation(fields:[personId], references:[id], onDelete:Restrict)
+  registrationDepartmentId String?
+  registrationDepartment Department? @relation(fields:[registrationDepartmentId], references:[id], onDelete:Restrict)
+  authProvider String @default("local")
+  providerSubject String?
+  sessions AuthSession[]
+  plans DevelopmentPlan[]
+  activities TrainingActivity[]
+  participations TrainingParticipation[]
+  results ApplicationResult[]
+  reviews Review[]
+  attachments Attachment[]
+  kpis KPIDefinition[]
+  exports ExportJob[]
+  notices Notification[]
+  archives ArchiveManifest[]
+  approvals DeletionApproval[]
+  audits AuditLog[]
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  @@map("users")
+}
+model AuthSession {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields:[userId], references:[id], onDelete:Cascade)
+  tokenHash String @unique
+  csrfToken String
+  expiresAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([expiresAt])
+  @@map("auth_sessions")
+}
+model RateLimit {
+  keyHash String @id
+  attempts Int @default(1)
+  resetAt DateTime @db.Timestamptz(3)
+  @@map("rate_limits")
+}
+model FiscalYear {
+  id String @id @default(cuid())
+  year Int @unique
+  startsOn DateTime @db.Date
+  endsOn DateTime @db.Date
+  state String @default("open")
+  dataVersion Int @default(1)
+  scopes AnnualPersonnelScope[]
+  plans DevelopmentPlan[]
+  schedules PlanSchedule[]
+  activities TrainingActivity[]
+  kpis KPIDefinition[]
+  exports ExportJob[]
+  notices Notification[]
+  archives ArchiveManifest[]
+  retention RetentionPolicy?
+  audits AuditLog[]
+  @@map("fiscal_years")
+}
+model AnnualPersonnelScope {
+  id String @id @default(cuid())
+  fiscalYearId String
+  fiscalYear FiscalYear @relation(fields:[fiscalYearId], references:[id], onDelete:Restrict)
+  personId String
+  person Person @relation(fields:[personId], references:[id], onDelete:Restrict)
+  departmentId String
+  department Department @relation(fields:[departmentId], references:[id], onDelete:Restrict)
+  included Boolean @default(true)
+  basis String
+  snapshottedAt DateTime @default(now()) @db.Timestamptz(3)
+  @@unique([fiscalYearId,personId])
+  @@map("annual_personnel_scopes")
+}
+model Strategy {
+  id String @id @default(cuid())
+  name String
+  level String
+  active Boolean @default(true)
+  institutionItems PlanItem[] @relation("InstitutionStrategy")
+  departmentItems PlanItem[] @relation("DepartmentStrategy")
+  activities TrainingActivity[]
+  @@map("strategies")
+}
+model DevelopmentPlan {
+  id String @id @default(cuid())
+  personId String
+  person Person @relation(fields:[personId],references:[id],onDelete:Restrict)
+  fiscalYearId String
+  fiscalYear FiscalYear @relation(fields:[fiscalYearId],references:[id],onDelete:Restrict)
+  title String
+  status String @default("draft")
+  sourceReference String?
+  notes String?
+  createdBy String
+  creator User @relation(fields:[createdBy],references:[id],onDelete:Restrict)
+  items PlanItem[]
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  @@map("development_plans")
+}
+model PlanItem {
+  id String @id @default(cuid())
+  developmentPlanId String
+  plan DevelopmentPlan @relation(fields:[developmentPlanId],references:[id],onDelete:Cascade)
+  category String
+  topic String
+  degree String?
+  higherPosition String?
+  plannedApplication String?
+  institutionStrategyId String?
+  institutionStrategy Strategy? @relation("InstitutionStrategy",fields:[institutionStrategyId],references:[id],onDelete:Restrict)
+  departmentStrategyId String?
+  departmentStrategy Strategy? @relation("DepartmentStrategy",fields:[departmentStrategyId],references:[id],onDelete:Restrict)
+  notes String?
+  needsSourceReview Boolean @default(false)
+  schedules PlanSchedule[]
+  participations TrainingParticipation[]
+  @@map("plan_items")
+}
+model PlanSchedule {
+  id String @id @default(cuid())
+  planItemId String
+  planItem PlanItem @relation(fields:[planItemId],references:[id],onDelete:Cascade)
+  fiscalYearId String
+  fiscalYear FiscalYear @relation(fields:[fiscalYearId],references:[id],onDelete:Restrict)
+  quarter Int
+  @@unique([planItemId,fiscalYearId,quarter])
+  @@map("plan_schedules")
+}
+model TrainingActivity {
+  id String @id @default(cuid())
+  fiscalYearId String
+  fiscalYear FiscalYear @relation(fields:[fiscalYearId],references:[id],onDelete:Restrict)
+  quarter Int
+  startsOn DateTime @db.Date
+  endsOn DateTime @db.Date
+  organizer String
+  category String
+  otherCategory String?
+  title String
+  location String
+  hours Decimal? @db.Decimal(9,2)
+  strategyId String?
+  strategy Strategy? @relation(fields:[strategyId],references:[id],onDelete:Restrict)
+  exceptionReason String?
+  exceptionReviewedBy String?
+  createdBy String
+  creator User @relation(fields:[createdBy],references:[id],onDelete:Restrict)
+  participations TrainingParticipation[]
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  @@index([fiscalYearId,startsOn])
+  @@map("training_activities")
+}
+model TrainingParticipation {
+  id String @id @default(cuid())
+  trainingActivityId String
+  activity TrainingActivity @relation(fields:[trainingActivityId],references:[id],onDelete:Cascade)
+  personId String
+  person Person @relation(fields:[personId],references:[id],onDelete:Restrict)
+  departmentId String
+  department Department @relation(fields:[departmentId],references:[id],onDelete:Restrict)
+  planItemId String?
+  planItem PlanItem? @relation(fields:[planItemId],references:[id],onDelete:Restrict)
+  status String @default("planned")
+  reportDueOn DateTime @db.Date
+  recordedBy String
+  recorder User @relation(fields:[recordedBy],references:[id],onDelete:Restrict)
+  result ApplicationResult?
+  attachments Attachment[]
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  @@unique([trainingActivityId,personId])
+  @@index([personId,status])
+  @@map("training_participations")
+}
+model ApplicationResult {
+  id String @id @default(cuid())
+  participationId String @unique
+  participation TrainingParticipation @relation(fields:[participationId],references:[id],onDelete:Cascade)
+  explanation String
+  outcome String
+  reportedOn DateTime @db.Date
+  reviewStatus String @default("pending")
+  version Int @default(1)
+  recordedBy String
+  recorder User @relation(fields:[recordedBy],references:[id],onDelete:Restrict)
+  reviews Review[]
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  @@map("application_results")
+}
+model Review {
+  id String @id @default(cuid())
+  applicationResultId String
+  result ApplicationResult @relation(fields:[applicationResultId],references:[id],onDelete:Cascade)
+  resultVersion Int
+  reviewerId String
+  reviewer User @relation(fields:[reviewerId],references:[id],onDelete:Restrict)
+  decision String
+  comment String
+  reviewedAt DateTime @default(now()) @db.Timestamptz(3)
+  @@map("reviews")
+}
+model Attachment {
+  id String @id @default(cuid())
+  participationId String
+  participation TrainingParticipation @relation(fields:[participationId],references:[id],onDelete:Cascade)
+  originalName String
+  mime String
+  size Int
+  sha256 String
+  data Bytes @db.ByteA
+  uploadedBy String
+  uploader User @relation(fields:[uploadedBy],references:[id],onDelete:Restrict)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@map("attachments")
+}
+model PendingUpload {
+  id String @id @default(cuid())
+  ownerId String
+  owner Person @relation(fields:[ownerId],references:[id],onDelete:Cascade)
+  participationId String
+  originalName String
+  totalSize Int
+  chunkCount Int
+  expiresAt DateTime @db.Timestamptz(3)
+  chunks UploadChunk[]
+  @@map("pending_uploads")
+}
+model UploadChunk {
+  id String @id @default(cuid())
+  uploadId String
+  upload PendingUpload @relation(fields:[uploadId],references:[id],onDelete:Cascade)
+  index Int
+  data Bytes @db.ByteA
+  @@unique([uploadId,index])
+  @@map("upload_chunks")
+}
+model KPIDefinition {
+  id String @id @default(cuid())
+  fiscalYearId String
+  fiscalYear FiscalYear @relation(fields:[fiscalYearId],references:[id],onDelete:Restrict)
+  departmentId String?
+  department Department? @relation(fields:[departmentId],references:[id],onDelete:Restrict)
+  personId String?
+  person Person? @relation(fields:[personId],references:[id],onDelete:Restrict)
+  code String
+  name String
+  description String
+  formula String
+  unit String
+  direction String @default("at_least")
+  evidenceRequired Boolean @default(false)
+  verifiedRequired Boolean @default(false)
+  idpStatus String @default("approved")
+  version Int
+  effectiveOn DateTime @db.Date
+  definedBy String
+  author User @relation(fields:[definedBy],references:[id],onDelete:Restrict)
+  target KPITarget?
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([fiscalYearId,code,version])
+  @@map("kpi_definitions")
+}
+model KPITarget {
+  id String @id @default(cuid())
+  definitionId String @unique
+  definition KPIDefinition @relation(fields:[definitionId],references:[id],onDelete:Cascade)
+  value Decimal? @db.Decimal(12,2)
+  @@map("kpi_targets")
+}
+model ExportJob {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict)
+  fiscalYearId String
+  fiscalYear FiscalYear @relation(fields:[fiscalYearId],references:[id],onDelete:Restrict)
+  kind String
+  format String
+  filters Json
+  status String @default("pending")
+  data Bytes? @db.ByteA
+  sha256 String?
+  rowCount Int @default(0)
+  dataVersion Int
+  error String?
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@map("export_jobs")
+}
+model Notification {
+  id String @id @default(cuid())
+  userId String?
+  user User? @relation(fields:[userId],references:[id],onDelete:Restrict)
+  fiscalYearId String
+  fiscalYear FiscalYear @relation(fields:[fiscalYearId],references:[id],onDelete:Restrict)
+  idempotencyKey String @unique
+  channel String
+  status String @default("pending")
+  message String
+  attempts Int @default(0)
+  error String?
+  sentAt DateTime? @db.Timestamptz(3)
+  leaseUntil DateTime? @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@map("notifications")
+}
+model RetentionPolicy {
+  id String @id @default(cuid())
+  fiscalYearId String @unique
+  fiscalYear FiscalYear @relation(fields:[fiscalYearId],references:[id],onDelete:Restrict)
+  dueOn DateTime? @db.Date
+  typeDueDates Json?
+  graceDays Int @default(30)
+  noticeDays Json @default("[30,7,1]")
+  autoDelete Boolean @default(false)
+  legalHold Boolean @default(true)
+  backupRetentionDays Int?
+  archiveRetentionDays Int?
+  policyReference String?
+  approvedBy String?
+  approvedAt DateTime? @db.Timestamptz(3)
+  @@map("retention_policies")
+}
+model ArchiveManifest {
+  id String @id @default(cuid())
+  fiscalYearId String
+  fiscalYear FiscalYear @relation(fields:[fiscalYearId],references:[id],onDelete:Restrict)
+  dataVersion Int
+  schemaVersion String
+  sha256 String
+  counts Json
+  reports Json
+  data Bytes? @db.ByteA
+  state String @default("created")
+  restoreTestedAt DateTime? @db.Timestamptz(3)
+  restoreEvidence Json?
+  receivedBy String?
+  receivedAt DateTime? @db.Timestamptz(3)
+  createdBy String
+  creator User @relation(fields:[createdBy],references:[id],onDelete:Restrict)
+  approval DeletionApproval?
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@map("archive_manifests")
+}
+model DeletionApproval {
+  id String @id @default(cuid())
+  manifestId String @unique
+  manifest ArchiveManifest @relation(fields:[manifestId],references:[id],onDelete:Restrict)
+  dataVersion Int
+  approvedBy String
+  approver User @relation(fields:[approvedBy],references:[id],onDelete:Restrict)
+  approvedAt DateTime @default(now()) @db.Timestamptz(3)
+  comment String
+  @@map("deletion_approvals")
+}
+model AuditLog {
+  id String @id @default(cuid())
+  actorId String?
+  actor User? @relation(fields:[actorId],references:[id],onDelete:Restrict)
+  ownerId String?
+  owner Person? @relation(fields:[ownerId],references:[id],onDelete:Restrict)
+  fiscalYearId String?
+  fiscalYear FiscalYear? @relation(fields:[fiscalYearId],references:[id],onDelete:Restrict)
+  action String
+  entity String
+  entityId String?
+  changes Json?
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@index([fiscalYearId,createdAt])
+  @@map("audit_logs")
+}

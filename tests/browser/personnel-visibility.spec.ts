@@ -1,0 +1,26 @@
+import {test,expect} from '@playwright/test';
+import {fixture,testDb} from '../fixtures';
+import {randomToken,sha256,sign} from '../../lib/security';
+test.afterAll(()=>testDb.$disconnect());
+test('บุคลากรที่ยังไม่มี snapshot เห็นรายการของตนและส่งออกรายการได้',async({page})=>{
+  const f=await fixture();
+  await testDb.annualPersonnelScope.deleteMany({where:{personId:f.user.personId!}});
+  const token=randomToken();
+  await testDb.authSession.create({data:{userId:f.user.id,tokenHash:sha256(sign(token)),csrfToken:randomToken(),expiresAt:new Date(Date.now()+600000)}});
+  await page.context().addCookies([{name:'management_session',value:token,url:'http://127.0.0.1:3001',httpOnly:true,sameSite:'Lax'}]);
+  await page.goto('/trainings');
+  await expect(page.getByText('กิจกรรมสมมติ 1',{exact:true})).toBeVisible();
+  await expect(page.getByText('กิจกรรมสมมติ 2',{exact:true})).toBeVisible();
+  await expect(page.getByText('ยังไม่มีรายการในช่วงที่เลือก',{exact:true})).toHaveCount(0);
+  const report=await (await page.request.get('/api/trainings')).json();expect(report.rows.length).toBe(2);
+  await page.locator(`a[href="/trainings/${f.participations[0].id}"]`).click();
+  await expect(page.getByRole('heading',{name:'กิจกรรมสมมติ 1',exact:true})).toBeVisible();
+  await page.goto('/trainings');
+  const form=page.locator('form[action="/api/exports"]');
+  await form.locator('[name="format"]').selectOption('csv');await form.locator('button[type="submit"]').click();
+  await expect(page).toHaveURL('/exports');
+  const link=page.locator('a[href^="/api/exports/"]');await expect(link).toHaveCount(1);
+  const csv=await (await page.request.get((await link.getAttribute('href'))!)).text();
+  expect(csv).toContain('กิจกรรมสมมติ 1');expect(csv).toContain('กิจกรรมสมมติ 2');
+  expect(csv).not.toContain('TEST-ADMIN');
+});

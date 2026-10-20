@@ -1,0 +1,1 @@
+export function Messages({query}:{query:Record<string,string|undefined>}){return <>{query.error&&<div className="alert danger" role="alert">{query.error}</div>}{query.success&&<div className="alert success" role="status">{query.success}</div>}</>;}

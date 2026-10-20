@@ -1,0 +1,15 @@
+{
+    "name": "rmutt-finance-skills",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "test:e2e": "playwright test",
+        "assets": "node scripts/copy-fonts.mjs"
+    },
+    "devDependencies": {
+        "@playwright/test": "^1.56.0"
+    },
+    "dependencies": {
+        "@fontsource/noto-sans-thai": "^5.2.0"
+    }
+}
