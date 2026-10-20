@@ -6,6 +6,7 @@ import {DashboardScreen} from '@/components/screens/dashboard';
 import {TrainingsScreen} from '@/components/screens/trainings';
 import {AdminScreen} from '@/components/screens/admin';
 import {ExportsScreen} from '@/components/screens/exports';
+import {ManualScreen} from '@/components/screens/manual';
 import {RetentionScreen} from '@/components/screens/retention';
 import {AuditScreen,NoticesScreen,PasswordScreen} from '@/components/screens/other';
 export const dynamic='force-dynamic';
@@ -20,6 +21,7 @@ export default async function Screen({params,searchParams}:Props) {
     if(segments[0]==='dashboard'&&segments.length===1)content=await DashboardScreen({actor,query});
     else if(segments[0]==='trainings')content=await TrainingsScreen({actor,query,segments});
     else if(segments[0]==='exports'&&segments.length===1)content=await ExportsScreen({actor,query});
+    else if(segments[0]==='manual'&&segments.length===1)content=ManualScreen({actor,query});
     else if(segments[0]==='settings'&&segments[1]==='password')content=PasswordScreen();
     else if(segments[0]==='admin') {
       if(segments.length===1)content=await AdminScreen({actor});
